@@ -6,6 +6,7 @@
 /coverage/
 /.design/
 /_bmad/
+/_bmad-output/
 .env
 .env.*
 !.env.example

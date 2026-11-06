@@ -172,7 +172,7 @@ class SSHService extends EventEmitter {
       if (!source) return;
       const filter = new OutputFilter(), item = { source, s, channel, executionId, kind, pending: '', closed: false };
       this.outputSources.add(item);
-      source.on('data', chunk => { source.pause(); item.pending += filter.push(chunk); this._drainOutput(); });
+      source.on('data', chunk => { source.pause(); const data = filter.push(chunk); this.emit('observed-output', { sessionId: s.id, generation: s.generation, channel, executionId: executionId || null, stream: kind, data, untrusted: true }); item.pending += data; this._drainOutput(); });
       source.on('end', () => { item.closed = true; this._drainOutput(); });
       source.on('close', () => { item.closed = true; this._drainOutput(); });
     };

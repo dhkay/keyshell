@@ -5,11 +5,18 @@ const call = (method, input) => window.keyshell.call(method, input);
 const sessions = new Map(), conversations = new Map(), pendingRequests = new Set();
 let connectionAttempt = null;
 let loginPending = false, loginError = '';
+let previewEnabled = false, adviceState = { enabled: false }, composing = false;
+const directRequests = new Map();
 let active = 'general', profiles = [], auth = {}, attachment = null, selected = null, models = [], modalCancel = null, dialogEpoch = 0;
 function el(tag, text, attrs = {}) { const node = document.createElement(tag); if (text !== null && text !== undefined) node.textContent = text; for (const [k, v] of Object.entries(attrs)) { if (k === 'class') node.className = v; else node.setAttribute(k, v); } return node; }
 const icon = name => el('img', null, { src: `assets/${name}`, alt: '', class: 'design-icon' });
 function button(text, action, cls = '') { const b = el('button', text, { type: 'button', class: cls }); b.addEventListener('click', safe(action)); return b; }
 const errorText = code => ({
+  'E-AI-BUSY': 'AI 응답이 진행 중입니다. 완료를 기다리거나 응답을 취소한 뒤 다시 보내세요.',
+  'E-AI-QUESTION': '질문을 입력해 주세요. 너무 긴 질문은 나누어 보내세요.',
+  'E-SHARE-SIZE': '전송할 대화나 첨부가 너무 큽니다. 첨부를 줄이거나 새 대화를 시작해 주세요.',
+  'E-AUTH-PLAN-PERMISSION': '이 계정에서 필요한 AI 이용 권한을 확인할 수 없습니다. 계정의 연결 권한을 확인해 주세요.',
+  'E-ADVICE-TARGET': '연결된 SSH 세션과 로그인된 ChatGPT 계정·모델을 선택한 뒤 자동 조언을 켜 주세요.',
   'E-SSH-AUTH': 'SSH authentication failed. Check the username and credentials, then reconnect.',
   'E-SSH-HOSTKEY-CHANGED': 'The server key differs from the trusted key. Authentication was blocked. Contact the server administrator and verify the full fingerprint.',
   'E-SSH-HOSTKEY-CANCELLED': 'Connection cancelled before authentication. Open a new connection when ready.',
@@ -77,7 +84,7 @@ function newConnection(profile = {}) {
   };
   host.focus();
 }
-async function refreshProfiles() { const state = await call('state'); profiles = state.profiles; renderProfiles(); }
+async function refreshProfiles() { const state = await call('state'); previewEnabled = state.previewEnabled; adviceState = state.advice; profiles = state.profiles; renderProfiles(); }
 const collapsed = new Set();
 function renderProfiles() {
   const nav = $('profiles'); nav.replaceChildren(); const query = $('search').value.toLowerCase();
@@ -99,12 +106,12 @@ function conversation(id = active) { if (!conversations.has(id)) conversations.s
 function renderMessages() { $('messages').replaceChildren(...conversation()); $('messages').scrollTop = $('messages').scrollHeight; }
 function message(text, cls, id = active) { const node = el('div', text, { class: cls }); conversation(id).push(node); if (id === active) renderMessages(); return node; }
 async function activate(id) {
-  await call('activate', id); if (id !== active) { clearModal(); discardSelection(); attachment = null; $('question').value = ''; }
+  const activation = await call('activate', id); adviceState = activation.advice; if (id !== active) { clearModal(); discardSelection(); attachment = null; $('question').value = ''; }
   active = id; for (const [sid, s] of sessions) s.pane.hidden = sid !== active;
   $('terminal-empty').hidden = id !== 'general'; $('terminals').hidden = id === 'general';
   $('target').textContent = id === 'general' ? 'No SSH session' : `${sessions.get(id).meta.username}@${sessions.get(id).meta.host}:${sessions.get(id).meta.port}`;
   $('ai-context').textContent = id === 'general' ? 'General conversation · no SSH target' : `Conversation linked to ${sessions.get(id).meta.name || sessions.get(id).meta.host}`;
-  renderSessions(); renderMessages(); renderAttachment(); $('cancel-ai').hidden = !pendingRequests.has(active); renderExecutions(); await restoreModel(id); fit();
+  renderSessions(); renderMessages(); renderAttachment(); $('cancel-ai').hidden = !pendingRequests.has(active); renderExecutions(); await restoreModel(id); renderSharing(); fit();
 }
 function renderSessions() {
   $('tabs').replaceChildren(button('General conversation', () => activate('general'), active === 'general' ? 'general-navigation active' : 'general-navigation'));
@@ -190,6 +197,41 @@ async function previewMessage() {
   q.addEventListener('input', safe(update)); a.addEventListener('input', safe(update));
   actions(body, [button('Cancel', clearModal), button('Remove attachment', async () => { draft = null; a.hidden = true; source.textContent = 'No terminal output attached'; await update(); }), send]); await update();
 }
+function renderSharing() {
+  const connected = sessions.get(active)?.meta.status === 'connected';
+  $('preview-toggle').textContent = `미리보기 ${previewEnabled ? 'ON' : 'OFF'}`; $('preview-toggle').setAttribute('aria-pressed', String(previewEnabled));
+  $('send-message').textContent = previewEnabled ? 'Preview →' : '전송 ↵'; $('send-message').setAttribute('aria-label', previewEnabled ? 'Preview message' : 'Send message');
+  $('send-message').disabled = pendingRequests.has(active) || directRequests.has(active);
+  $('send-hint').textContent = previewEnabled ? 'Enter: 미리보기 · Shift+Enter: 줄바꿈' : 'Enter: 바로 전송 · Shift+Enter: 줄바꿈';
+  $('advice-toggle').textContent = `AI 자동 조언 ${adviceState.enabled ? 'ON · 중지' : 'OFF'}`; $('advice-toggle').setAttribute('aria-pressed', String(adviceState.enabled));
+  $('advice-toggle').disabled = !adviceState.enabled && (!connected || !auth.activeAccountId || !models.length);
+  $('advice-toggle').title = adviceState.enabled ? '이후 자동 전송을 중지합니다.' : !connected ? '먼저 SSH 세션에 연결해 주세요.' : !auth.activeAccountId || !models.length ? 'ChatGPT 로그인과 모델 선택이 필요합니다.' : '공유할 계정·모델·출력 범위를 확인한 뒤 켤 수 있습니다.';
+  $('advice-status').hidden = !adviceState.enabled && !adviceState.reason;
+  const reason = { stopped: '사용자가 중지했습니다.', cancelled: '응답을 취소했습니다.', 'tab-changed': '다른 탭으로 이동했습니다.', 'tab-closed': '세션 탭을 닫았습니다.', 'model-changed': '모델이 바뀌었습니다.', 'account-changed': '계정 또는 인증 상태가 바뀌었습니다.', 'connection-changed': 'SSH 연결이 바뀌거나 끊겼습니다.', 'context-changed': '공유 대상이 바뀌었습니다.', 'conversation-reset': '새 대화를 시작했습니다.', 'limit-reached': '10회 안내를 완료했습니다. 계속하려면 다시 켜세요.', 'request-failed': 'AI 요청이 실패했습니다. 다시 켜기 전 연결과 사용 한도를 확인하세요.', 'renderer-restarted': '화면이 다시 시작됐습니다.' }[adviceState.reason] || '다시 켜려면 공유 범위를 확인하세요.';
+  $('advice-status').textContent = adviceState.enabled ? `새 SSH 출력 자동 공유 중 · ${adviceState.remaining}회 남음` : `자동 공유 중지 · ${reason}${adviceState.error ? ` ${errorText(adviceState.error)}` : ''}`;
+  $('sharing-privacy').textContent = adviceState.enabled ? '자동 조언에 동의한 이 세션의 새 출력이 공유됩니다.' : '질문과 직접 첨부한 출력만 공유됩니다.';
+}
+async function submitMessage() {
+  if (pendingRequests.has(active) || directRequests.has(active)) return;
+  if (previewEnabled) return previewMessage();
+  if (!auth.activeAccountId || !models.length) return notice('Sign in and select an authorized AI model first.');
+  const sessionId = active, question = $('question').value, selectedAttachment = attachment;
+  if (!question.trim()) return;
+  directRequests.set(sessionId, { question, attachment: selectedAttachment }); pendingRequests.add(sessionId); renderSharing();
+  $('question').value = ''; attachment = null; renderAttachment(); $('cancel-ai').hidden = false;
+  try { await call('directSend', { sessionId, question, model: $('model').value, attachments: selectedAttachment ? [{ ...selectedAttachment }] : [] }); }
+  catch (e) { if (active === sessionId && !$('question').value) { $('question').value = question; if (!attachment) attachment = selectedAttachment; renderAttachment(); } throw e; }
+  finally { directRequests.delete(sessionId); pendingRequests.delete(sessionId); $('cancel-ai').hidden = !pendingRequests.has(active); renderSharing(); }
+}
+async function toggleAdvice() {
+  if (adviceState.enabled) { adviceState = await call('adviceStop'); renderSharing(); return; }
+  const prepared = await call('advicePrepare', { sessionId: active, model: $('model').value });
+  const body = modal('AI 자동 조언 켜기', () => call('adviceStop'));
+  body.append(el('p', `공유할 SSH 세션: ${prepared.target.username}@${prepared.target.host}:${prepared.target.port}\nChatGPT 계정: ${prepared.account}\n모델: ${prepared.model}`), el('p', '켜는 시점 이후 앱에서 이 세션의 새 터미널·실행 출력을 수신할 때만 자동 공유합니다. 최근 출력 최대 8KB를 모아 출력이 잠시 멈추거나 최대 10초가 지나면 안내를 요청합니다. 최소 1분 간격, 최대 10회이며 질문과 기존 대화도 요청에 포함됩니다.'), el('p', '화면 캡처나 다른 세션은 읽지 않습니다. 로컬 비밀 가림은 완벽하지 않습니다. 끄면 이후 전송을 중지하지만 이미 보낸 내용은 회수할 수 없습니다. 계정·모델·탭·연결·대화가 바뀌면 꺼집니다. 명령 실행은 별도 승인이 필요합니다.'));
+  const consent = field(body, '이 세션의 새 출력을 ChatGPT에 자동 공유하는 데 동의합니다', 'advice-consent', 'checkbox');
+  const enable = button('동의하고 켜기', async () => { enable.disabled = true; try { adviceState = await call('adviceEnable', prepared.token); modalCancel = null; clearModal(); renderSharing(); } catch (e) { clearModal(); notice('공유 동의가 만료되었거나 대상이 바뀌었습니다. AI 자동 조언 버튼에서 다시 확인해 주세요.'); } }, 'mint'); enable.disabled = true; consent.onchange = () => { enable.disabled = !consent.checked; };
+  actions(body, [button('Cancel', clearModal), enable]);
+}
 async function showExecution(command) {
   if (active === 'general') return notice('Connect and select an SSH session to review execution.');
   const e = await call('execution', { id: active, command });
@@ -247,6 +289,7 @@ async function renderAuth(value) {
   $('account').replaceChildren(el('option', 'Choose account', { value: '' }), ...value.accounts.map(a => el('option', a.email || a.label || a.id, { value: a.id }))); $('account').value = value.activeAccountId || (value.accounts.some(a => a.id === previousSelection) ? previousSelection : value.accounts[0]?.id || ''); $('add-account').hidden = !value.accounts.length;
   renderSettingsAuth();
   if (connected) { try { models = await call('models'); $('model').replaceChildren(...models.map(m => el('option', m.display_name, { value: m.slug }))); await restoreModel(); } catch (e) { notice(e); } } else { models = []; $('model').replaceChildren(); }
+  renderSharing();
 }
 function renderSettingsAuth() {
   const status = $('settings-auth-status'); if (!status || !$('modal').open) return;
@@ -280,7 +323,7 @@ async function updateDialog(check = false) {
 window.keyshell.subscribe(safe(async ({ type, detail }) => {
   if (type === 'session') { ensureSession(detail);
     if (['failed', 'disconnected'].includes(detail.status)) { if (active === detail.sessionId) { discardSelection(); attachment = null; renderAttachment(); } if (detail.error) notice(detail.error); }
-    renderSessions(); if (active === detail.sessionId) $('connection-state').textContent = detail.status;
+    renderSessions(); if (active === detail.sessionId) $('connection-state').textContent = detail.status; renderSharing();
   } else if (type === 'host-key') {
     const attempt = connectionAttempt;
     if (!attempt || attempt.cancelled || detail.attemptId !== attempt.id || attempt.epoch !== dialogEpoch) { await call('hostKey', { id: detail.challengeId, trust: false }); return; }
@@ -299,13 +342,19 @@ window.keyshell.subscribe(safe(async ({ type, detail }) => {
     if (detail.status === 'running') { const stop = button('Request remote TERM', async () => { await call('cancelExecution', detail.id); stop.disabled = true; }); node.append(stop); }
   } else if (type === 'change') { loginPending = false; loginError = ''; if (!$('settings-auth-status') || !$('modal').open) clearModal(); discardSelection(); attachment = null; conversations.clear(); renderMessages(); renderAttachment(); $('cancel-login').hidden = true; await renderAuth(detail); }
   else if (type === 'auth-error') { if (detail.code === 'E-AUTH-CANCELLED') return; loginPending = false; loginError = errorText(detail.code); $('cancel-login').hidden = true; renderSettingsAuth(); notice(detail.code); }
+  else if (type === 'advice') { adviceState = detail; renderSharing(); }
+  else if (type === 'manual-question' || type === 'automatic-question') {
+    message(`${type === 'automatic-question' ? '자동 조언 요청\n' : ''}${detail.text}`, 'question', detail.sessionId);
+  }
   else if (type === 'ai') {
     const id = detail.sessionId || active;
-    if (detail.type === 'sending') { pendingRequests.add(id); $('cancel-ai').hidden = !pendingRequests.has(active); }
+    if (detail.type === 'queued' || detail.type === 'sending') { pendingRequests.add(id); $('cancel-ai').hidden = !pendingRequests.has(active); }
+    else if (detail.type === 'cancelled') { pendingRequests.delete(id); $('cancel-ai').hidden = !pendingRequests.has(active); const n = conversation(id).find(n => n.dataset.request === detail.requestId); if (n) n.append(el('p', '응답이 중지되었습니다. 자동 재전송하지 않습니다.', { class: 'sub' })); else { const status = message('응답이 중지되었습니다. 자동 재전송하지 않습니다.', 'request-status', id); status.dataset.request = detail.requestId; } }
     else if (detail.type === 'delta') { const log = conversation(id); let n = log.find(n => n.dataset.request === detail.requestId); if (!n) { n = message('', 'answer', id); n.dataset.request = detail.requestId; } n.textContent += detail.text; if (active === id) $('messages').scrollTop = $('messages').scrollHeight; }
     else if (detail.type === 'completed') { for (const card of detail.commands) commandCard(card, id); if (active === id) renderMessages(); pendingRequests.delete(id); $('cancel-ai').hidden = !pendingRequests.has(active); }
     else if (detail.type === 'error') { message(`${errorText(detail.error.code)} · ${detail.error.transmission}. No automatic retry.`, 'answer', id); pendingRequests.delete(id); $('cancel-ai').hidden = !pendingRequests.has(active); }
     else if (detail.type === 'reset') { pendingRequests.clear(); $('cancel-ai').hidden = true; conversations.clear(); renderMessages(); }
+    renderSharing();
   } else if (type === 'update') { $('update').textContent = detail.status === 'available' ? `Update ${detail.version} available` : detail.status === 'downloaded' ? 'Update ready to install' : 'Check for updates'; }
 }));
 for (const b of document.querySelectorAll('[data-new]')) b.onclick = () => newConnection();
@@ -317,8 +366,11 @@ $('copy-selection').onclick = safe(() => { const choice = validSelection(); if (
 $('clear-selection').onclick = discardSelection;
 $('share-selection').onclick = () => { const choice = validSelection(); if (!choice) { discardSelection(); return; } attachment = { text: choice.text, source: choice.source }; renderAttachment(); $('question').focus(); };
 $('attachment').onclick = editAttachment;
-$('composer').onsubmit = safe(event => { event.preventDefault(); return previewMessage(); });
-$('question').onkeydown = event => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); previewMessage().catch(notice); } };
+$('composer').onsubmit = safe(event => { event.preventDefault(); return submitMessage(); });
+$('question').addEventListener('compositionstart', () => { composing = true; }); $('question').addEventListener('compositionend', () => { composing = false; });
+$('question').onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !composing && event.keyCode !== 229) { event.preventDefault(); if (!event.repeat) submitMessage().catch(notice); } };
+$('preview-toggle').onclick = safe(async () => { const result = await call('previewMode', !previewEnabled); previewEnabled = result.previewEnabled; renderSharing(); });
+$('advice-toggle').onclick = safe(toggleAdvice);
 $('question').oninput = safe(() => call('invalidate'));
 $('login').onclick = safe(() => login()); $('add-account').onclick = safe(() => login(false, true));
 $('cancel-login').onclick = safe(cancelLogin);
@@ -328,5 +380,5 @@ $('model').onchange = safe(() => call('model', { id: active, model: $('model').v
 $('new-chat').onclick = safe(async () => { await call('reset', active); pendingRequests.delete(active); $('cancel-ai').hidden = true; conversations.delete(active); attachment = null; renderMessages(); renderAttachment(); });
 $('cancel-ai').onclick = safe(async () => { await call('cancelAI', active); pendingRequests.delete(active); $('cancel-ai').hidden = true; notice('AI request cancelled. A transmitted request may have reached the service.'); });
 setInterval(() => { const s = sessions.get(active); $('elapsed').textContent = s ? `${s.meta.status} · ${Math.floor((Date.now() - s.since) / 60000)}m · latency not measured` : 'No active session'; }, 1000);
-async function start() { const state = await call('state'); profiles = state.profiles; settings.version = state.version; settings.packaged = state.packaged; renderProfiles(); for (const meta of state.sessions) ensureSession(meta); await renderAuth(state.auth); await activate('general'); if (state.recovery) { $('recovery').textContent = state.recovery.message; $('recovery').hidden = false; } for (const e of state.executions || []) { const s = sessions.get(e.sessionId); if (s) executionNode(s, `${e.id}-status`).textContent = `${e.command}\nExecution: ${e.status}${Number.isInteger(e.exitCode) ? ` · exit ${e.exitCode}` : ''}\nPrevious output was not recovered after renderer restart.`; } }
+async function start() { const state = await call('state'); previewEnabled = state.previewEnabled; adviceState = state.advice; profiles = state.profiles; settings.version = state.version; settings.packaged = state.packaged; renderProfiles(); for (const meta of state.sessions) ensureSession(meta); await renderAuth(state.auth); await activate('general'); if (state.recovery) { $('recovery').textContent = state.recovery.message; $('recovery').hidden = false; } for (const e of state.executions || []) { const s = sessions.get(e.sessionId); if (s) executionNode(s, `${e.id}-status`).textContent = `${e.command}\nExecution: ${e.status}${Number.isInteger(e.exitCode) ? ` · exit ${e.exitCode}` : ''}\nPrevious output was not recovered after renderer restart.`; } }
 start().catch(notice);

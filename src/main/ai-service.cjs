@@ -74,7 +74,16 @@ class AIService extends EventEmitter {
     this.previews.set(token, { sessionId, accountId: this.auth.activeId, epoch: this.epoch, model, body, expiresAt: this.now() + this.previewTtlMs });
     return { token, sessionId, accountId: this.auth.activeId, model, sources, redactions, reviewRequired: true, completeDetection: false, request: { method: 'POST', url: `${RESOURCE}/responses`, headers: { 'Content-Type': 'application/json' }, payload: JSON.parse(body) } };
   }
-  cancel(sessionId) { validateSession(sessionId); const r = this.requests.get(sessionId); if (r) { r.cancelled = true; r.controller.abort(); } this._invalidatePreview(sessionId); }
+  cancel(sessionId) { validateSession(sessionId); const r = this.requests.get(sessionId); if (r && !r.cancelled) { r.cancelled = true; r.controller.abort(); this.emit('state', { type: 'cancelled', sessionId, requestId: r.id }); } this._invalidatePreview(sessionId); }
+  _accessToken(signal) {
+    return new Promise((resolve, reject) => {
+      const cleanup = () => signal.removeEventListener('abort', cancelled);
+      const cancelled = () => { cleanup(); reject(Object.assign(new Error('E-AI-CANCELLED'), { code: 'E-AI-CANCELLED' })); };
+      if (signal.aborted) { cancelled(); return; }
+      signal.addEventListener('abort', cancelled, { once: true });
+      Promise.resolve().then(() => { if (signal.aborted) fail('E-AI-CANCELLED'); return this.auth.accessToken(); }).then(token => { cleanup(); resolve(token); }, error => { cleanup(); reject(error); });
+    });
+  }
   async send(token) {
     const p = this.previews.get(token); this.previews.delete(token);
     if (!p || p.expiresAt <= this.now() || p.epoch !== this.epoch || p.accountId !== this.auth.activeId || this.sessions.get(p.sessionId)?.model !== p.model) fail('E-AI-APPROVAL');
@@ -84,8 +93,9 @@ class AIService extends EventEmitter {
     let sent = false, output = '', completed = false;
     const current = () => !request.cancelled && this.epoch === p.epoch && this.auth.activeId === p.accountId;
     const emit = detail => { if (current()) this.emit('state', { sessionId: p.sessionId, requestId: request.id, ...detail }); };
+    emit({ type: 'queued' });
     try {
-      const accessToken = await this.auth.accessToken();
+      const accessToken = await this._accessToken(request.controller.signal);
       if (!current()) fail('E-AI-CANCELLED');
       emit({ type: 'sending' }); sent = true;
       const response = await this.fetch(`${RESOURCE}/responses`, { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: p.body, signal: AbortSignal.any([request.controller.signal, AbortSignal.timeout(180000)]), redirect: 'error' });
