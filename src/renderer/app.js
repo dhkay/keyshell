@@ -209,7 +209,7 @@ function renderSharing() {
   $('advice-status').hidden = !adviceState.enabled && !adviceState.reason;
   const reason = { stopped: '사용자가 중지했습니다.', cancelled: '응답을 취소했습니다.', 'tab-changed': '다른 탭으로 이동했습니다.', 'tab-closed': '세션 탭을 닫았습니다.', 'model-changed': '모델이 바뀌었습니다.', 'account-changed': '계정 또는 인증 상태가 바뀌었습니다.', 'connection-changed': 'SSH 연결이 바뀌거나 끊겼습니다.', 'context-changed': '공유 대상이 바뀌었습니다.', 'conversation-reset': '새 대화를 시작했습니다.', 'limit-reached': '10회 안내를 완료했습니다. 계속하려면 다시 켜세요.', 'request-failed': 'AI 요청이 실패했습니다. 다시 켜기 전 연결과 사용 한도를 확인하세요.', 'renderer-restarted': '화면이 다시 시작됐습니다.' }[adviceState.reason] || '다시 켜려면 공유 범위를 확인하세요.';
   $('advice-status').textContent = adviceState.enabled ? `새 SSH 출력 자동 공유 중 · ${adviceState.remaining}회 남음` : `자동 공유 중지 · ${reason}${adviceState.error ? ` ${errorText(adviceState.error)}` : ''}`;
-  $('sharing-privacy').textContent = adviceState.enabled ? '자동 조언에 동의한 이 세션의 새 출력이 공유됩니다.' : '질문과 직접 첨부한 출력만 공유됩니다.';
+  $('sharing-privacy').textContent = adviceState.enabled ? '동의한 새 SSH 출력과 이 대화의 이전 내용이 공유됩니다.' : '질문·직접 첨부한 출력·이 대화의 이전 내용이 전송됩니다.';
 }
 async function submitMessage() {
   if (pendingRequests.has(active) || directRequests.has(active)) return;

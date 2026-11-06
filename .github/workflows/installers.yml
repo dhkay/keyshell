@@ -51,7 +51,10 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm run build
-      - name: 설정 화면 인증 상태 회귀 검증
+      - name: Electron 개발 런타임 준비
+        if: runner.os != 'Linux'
+        run: npx electron --version
+      - name: 설정 및 AI 공유 모드 화면 회귀 검증
         if: runner.os != 'Linux'
         run: node --test --test-name-pattern="settings reflect|AI sharing modes" tests/desktop.test.cjs
       - name: 개발용 단일 설치파일 생성

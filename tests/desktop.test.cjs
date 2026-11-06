@@ -182,7 +182,7 @@ test('execution result selection shares only explicit active output through mask
   } finally { for (const client of clients) { client.end(); client._sock?.destroy(); } if (app) { await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); }).catch(() => {}); await app.close().catch(() => {}); } await new Promise(resolve => server.close(resolve)); fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('settings reflect ChatGPT sign-in progress, success, account and sign-out without closing', { timeout: 30000 }, async () => {
+test('settings reflect ChatGPT sign-in progress, success, account and sign-out without closing', { timeout: 90000 }, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'keyshell-settings-auth-'));
   let app;
   try {
@@ -235,7 +235,7 @@ test('settings reflect ChatGPT sign-in progress, success, account and sign-out w
   }
 });
 
-test('AI sharing modes: Enter sends once, IME and Shift+Enter do not send, auto advice needs consent and fresh SSH output', { timeout: 60000 }, async () => {
+test('AI sharing modes: Enter sends once, IME and Shift+Enter do not send, auto advice needs consent and fresh SSH output', { timeout: 120000 }, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'keyshell-sharing-modes-')), clients = new Set(), commands = [];
   const key = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs1', format: 'pem' });
   let shellStream, app;
