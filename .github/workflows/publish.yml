@@ -1,0 +1,44 @@
+name: Publish verified signed candidates
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run:
+        description: Successful Signed release candidates workflow run ID
+        required: true
+      tag:
+        description: Release tag (must match package version, for example v0.1.0)
+        required: true
+permissions:
+  contents: read
+  actions: read
+jobs:
+  publish:
+    environment: github-release-publication
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate release tag and candidate provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          node -e 'if(process.env.RELEASE_TAG !== "v" + require("./package.json").version || !/^[0-9]+$/.test(process.env.CANDIDATE_RUN)) process.exit(1)'
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN" > candidate.json
+          node -e 'const c=require("./candidate.json"); if(c.conclusion!=="success" || c.path!==".github/workflows/release.yml" || c.head_sha!==process.env.GITHUB_SHA || c.repository.full_name!==process.env.GITHUB_REPOSITORY) process.exit(1)'
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --pattern 'signed-candidate-*' --dir candidates
+          test -d candidates/signed-candidate-windows-latest
+          test -d candidates/signed-candidate-macos-latest
+      - name: Publish candidate installers and update manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          mapfile -d '' assets < <(find candidates -mindepth 2 -maxdepth 2 -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' -o -name 'latest*.yml' -o -name '*.blockmap' \) -print0)
+          test "${#assets[@]}" -gt 0
+          gh release create "$RELEASE_TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "KeyShell $RELEASE_TAG" --generate-notes

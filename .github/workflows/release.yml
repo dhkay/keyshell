@@ -1,0 +1,65 @@
+name: Signed release candidates
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  signed:
+    environment: signed-release
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            certificate: WINDOWS_CSC_LINK
+            password: WINDOWS_CSC_KEY_PASSWORD
+          - os: macos-latest
+            certificate: MACOS_CSC_LINK
+            password: MACOS_CSC_KEY_PASSWORD
+    runs-on: ${{ matrix.os }}
+    env:
+      KEYSHELL_SIGNED_RELEASE: '1'
+      KEYSHELL_RELEASE_REPOSITORY: ${{ github.repository }}
+      CSC_LINK: ${{ secrets[matrix.certificate] }}
+      CSC_KEY_PASSWORD: ${{ secrets[matrix.password] }}
+      KEYSHELL_WINDOWS_PUBLISHER: ${{ vars.KEYSHELL_WINDOWS_PUBLISHER }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run test:desktop
+      - run: npm audit --omit=dev
+      - run: npm run package:release
+      - run: node scripts/verify-package.cjs release
+      - name: Verify Windows application and installer signatures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem release -Filter *.exe -Recurse
+          if (!$files) { throw 'No signed executables found' }
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature $file.FullName
+            if ($signature.Status -ne 'Valid') { throw "Invalid signature: $($file.Name)" }
+            if ($signature.SignerCertificate.Subject -notmatch [regex]::Escape($env:KEYSHELL_WINDOWS_PUBLISHER)) { throw 'Unexpected signing publisher' }
+          }
+      - name: Verify macOS application signature and notarization
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          test -n "$(find release -maxdepth 3 -name '*.app' -print -quit)"
+          find release -maxdepth 3 -name '*.app' -print0 | while IFS= read -r -d '' app_path; do
+            codesign --verify --deep --strict --verbose=2 "$app_path"
+            spctl --assess --type execute --verbose=2 "$app_path"
+            xcrun stapler validate "$app_path"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-candidate-${{ matrix.os }}
+          path: release/
