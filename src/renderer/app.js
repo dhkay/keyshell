@@ -4,6 +4,7 @@ const $ = id => document.getElementById(id);
 const call = (method, input) => window.keyshell.call(method, input);
 const sessions = new Map(), conversations = new Map(), pendingRequests = new Set();
 let connectionAttempt = null;
+let loginPending = false, loginError = '';
 let active = 'general', profiles = [], auth = {}, attachment = null, selected = null, models = [], modalCancel = null, dialogEpoch = 0;
 function el(tag, text, attrs = {}) { const node = document.createElement(tag); if (text !== null && text !== undefined) node.textContent = text; for (const [k, v] of Object.entries(attrs)) { if (k === 'class') node.className = v; else node.setAttribute(k, v); } return node; }
 const icon = name => el('img', null, { src: `assets/${name}`, alt: '', class: 'design-icon' });
@@ -224,7 +225,14 @@ function appendExecutionOutput(s, detail) {
 function showLogoutResult(result) {
   notice(`${result.localCredentialsCleared === false ? 'Credentials are blocked in this session, but deleting stored credentials failed. Clear stored app credentials before restarting.' : 'Local credentials cleared.'} ${result.remoteRevocationConfirmed ? 'Remote revocation confirmed.' : 'Remote revocation could not be confirmed; revoke this app in your account settings.'}`);
 }
-async function login(remember = false, addNew = false) { const accountId = !addNew && $('account').value; await call('login', { remember, ...(accountId ? { accountId } : {}) }); $('cancel-login').hidden = false; }
+async function login(remember = false, addNew = false) {
+  if (loginPending) return;
+  const accountId = !addNew && $('account').value; loginPending = true; loginError = ''; renderSettingsAuth();
+  try { await call('login', { remember, ...(accountId ? { accountId } : {}) }); }
+  catch (e) { loginPending = false; loginError = errorText(e.message); renderSettingsAuth(); throw e; }
+  $('cancel-login').hidden = !loginPending;
+}
+async function cancelLogin() { await call('cancelLogin'); loginPending = false; loginError = ''; $('cancel-login').hidden = true; renderSettingsAuth(); }
 async function recoverTrust(sessionId) {
   const preview = await call('rotatePreview', sessionId), body = modal('Verify replacement SSH host key');
   body.append(el('p', `Target: ${preview.old.host}:${preview.old.port}. Authentication remains blocked until you independently verify the replacement key.`), el('p', 'Previously trusted fingerprint'), el('div', preview.old.fingerprint, { class: 'fingerprint' }), el('p', `Observed replacement (${preview.next.keyType})`), el('div', preview.next.fingerprint, { class: 'fingerprint' }));
@@ -237,13 +245,32 @@ async function renderAuth(value) {
   $('auth-state').textContent = connected ? `ChatGPT · ${account.email || account.label || 'Signed in'}${value.developmentFixture ? ' · DEVELOPMENT FIXTURE' : ''}` : 'ChatGPT · Not signed in'; $('auth-state').prepend(icon('cutout-77-341000b4a2b3.png'));
   $('login').hidden = connected; $('logout').hidden = !connected; $('account-label').hidden = !value.accounts.length; $('model-label').hidden = !connected;
   $('account').replaceChildren(el('option', 'Choose account', { value: '' }), ...value.accounts.map(a => el('option', a.email || a.label || a.id, { value: a.id }))); $('account').value = value.activeAccountId || (value.accounts.some(a => a.id === previousSelection) ? previousSelection : value.accounts[0]?.id || ''); $('add-account').hidden = !value.accounts.length;
+  renderSettingsAuth();
   if (connected) { try { models = await call('models'); $('model').replaceChildren(...models.map(m => el('option', m.display_name, { value: m.slug }))); await restoreModel(); } catch (e) { notice(e); } } else { models = []; $('model').replaceChildren(); }
 }
+function renderSettingsAuth() {
+  const status = $('settings-auth-status'); if (!status || !$('modal').open) return;
+  const account = auth.accounts?.find(a => a.id === auth.activeAccountId), connected = !!account?.authenticated;
+  const wasConnected = status.dataset.connected === 'true'; status.dataset.connected = String(connected);
+  const state = loginPending ? 'pending' : loginError ? 'error' : connected ? 'connected' : 'disconnected';
+  status.dataset.state = state;
+  $('settings-auth-label').textContent = `ChatGPT · ${loginPending ? '로그인 중…' : loginError ? '로그인 실패' : connected ? '연결됨' : '연결 안 됨'}`;
+  $('settings-auth-detail').textContent = loginPending ? '브라우저에서 로그인을 완료해 주세요. 연결이 확인되면 자동으로 갱신됩니다.' : loginError || (connected ? `${account.email || account.label || '로그인된 계정'}${auth.developmentFixture ? ' · DEVELOPMENT FIXTURE' : ''}` : 'ChatGPT에 로그인하면 연결된 계정이 여기에 표시됩니다.');
+  $('settings-sign-in').hidden = connected && !loginError; $('settings-sign-in').disabled = loginPending;
+  $('settings-sign-out').hidden = !connected; $('settings-cancel-login').hidden = !loginPending;
+  const remember = document.querySelector('#modal input[name="remember"]');
+  if (remember) { remember.disabled = auth.persistence !== 'encrypted' || connected || loginPending; if (connected) remember.checked = !!account.remembered; else if (wasConnected) remember.checked = false; }
+}
 function settings() {
-  const body = modal('Settings & privacy'); body.append(el('p', `KeyShell ${settings.version} · ${settings.packaged ? 'Packaged build' : 'Development build'}\nAuthentication storage: ${auth.persistence === 'encrypted' ? 'OS encrypted storage available' : 'Memory only'}.`), el('p', 'SSH credentials stay in memory. Saved connection profiles, trusted host keys and ChatGPT account registration metadata (email, identity, client ID and host ID) persist locally. ChatGPT tokens persist only when you opt into OS-encrypted storage. Sign-out removes tokens while keeping account registration mappings for future sign-in. Conversations, terminal output and execution records stay in memory and are discarded when the app exits. Nothing reconnects, sends or executes automatically after restart.'));
+  const body = modal('Settings & privacy');
+  const status = el('div', null, { id: 'settings-auth-status', class: 'settings-auth-status', role: 'status', 'aria-live': 'polite' });
+  status.append(el('strong', '', { id: 'settings-auth-label' }), el('p', '', { id: 'settings-auth-detail' })); body.append(status);
+  body.append(el('p', `KeyShell ${settings.version} · ${settings.packaged ? 'Packaged build' : 'Development build'}\nAuthentication storage: ${auth.persistence === 'encrypted' ? 'OS encrypted storage available' : 'Memory only'}.`), el('p', 'SSH credentials stay in memory. Saved connection profiles, trusted host keys and ChatGPT account registration metadata (email, identity, client ID and host ID) persist locally. ChatGPT tokens persist only when you opt into OS-encrypted storage. Sign-out removes tokens while keeping account registration mappings for future sign-in. Conversations, terminal output and execution records stay in memory and are discarded when the app exits. Nothing reconnects, sends or executes automatically after restart.'));
   for (const session of sessions.values()) if (session.meta.error === 'E-SSH-HOSTKEY-CHANGED') body.append(button(`Recover trusted key: ${session.meta.host}:${session.meta.port}`, () => recoverTrust(session.meta.sessionId)));
   const remember = field(body, 'Remember ChatGPT login using OS encryption', 'remember', 'checkbox'); remember.disabled = auth.persistence !== 'encrypted';
-  actions(body, [button('Cancel sign-in', () => call('cancelLogin')), button('Sign in', async () => { await login(remember.checked); clearModal(); }), button('Sign out', async () => { const result = await call('logout'); showLogoutResult(result); clearModal(); }), button('Done', clearModal)]);
+  const signIn = button('Sign in', () => login(remember.checked)), signOut = button('Sign out', async () => showLogoutResult(await call('logout'))), cancel = button('Cancel sign-in', cancelLogin);
+  signIn.id = 'settings-sign-in'; signOut.id = 'settings-sign-out'; cancel.id = 'settings-cancel-login';
+  actions(body, [cancel, signIn, signOut, button('Done', clearModal)]); renderSettingsAuth();
 }
 async function updateDialog(check = false) {
   let state; try { state = check ? await call('checkUpdate') : (await call('state')).updates; } catch (e) { notice(e); return; }
@@ -270,8 +297,8 @@ window.keyshell.subscribe(safe(async ({ type, detail }) => {
     const node = executionNode(s, `${detail.id}-status`);
     node.textContent = `${detail.command}\nExecution: ${detail.status}${Number.isInteger(detail.exitCode) ? ` · exit ${detail.exitCode}` : ''}${detail.error ? ` · ${errorText(detail.error)}` : ''}`;
     if (detail.status === 'running') { const stop = button('Request remote TERM', async () => { await call('cancelExecution', detail.id); stop.disabled = true; }); node.append(stop); }
-  } else if (type === 'change') { clearModal(); discardSelection(); attachment = null; conversations.clear(); renderMessages(); renderAttachment(); $('cancel-login').hidden = true; await renderAuth(detail); }
-  else if (type === 'auth-error') { $('cancel-login').hidden = true; notice(detail.code); }
+  } else if (type === 'change') { loginPending = false; loginError = ''; if (!$('settings-auth-status') || !$('modal').open) clearModal(); discardSelection(); attachment = null; conversations.clear(); renderMessages(); renderAttachment(); $('cancel-login').hidden = true; await renderAuth(detail); }
+  else if (type === 'auth-error') { if (detail.code === 'E-AUTH-CANCELLED') return; loginPending = false; loginError = errorText(detail.code); $('cancel-login').hidden = true; renderSettingsAuth(); notice(detail.code); }
   else if (type === 'ai') {
     const id = detail.sessionId || active;
     if (detail.type === 'sending') { pendingRequests.add(id); $('cancel-ai').hidden = !pendingRequests.has(active); }
@@ -294,7 +321,7 @@ $('composer').onsubmit = safe(event => { event.preventDefault(); return previewM
 $('question').onkeydown = event => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); previewMessage().catch(notice); } };
 $('question').oninput = safe(() => call('invalidate'));
 $('login').onclick = safe(() => login()); $('add-account').onclick = safe(() => login(false, true));
-$('cancel-login').onclick = safe(async () => { await call('cancelLogin'); $('cancel-login').hidden = true; });
+$('cancel-login').onclick = safe(cancelLogin);
 $('logout').onclick = safe(async () => showLogoutResult(await call('logout')));
 $('account').onchange = safe(() => $('account').value ? call('account', $('account').value) : null);
 $('model').onchange = safe(() => call('model', { id: active, model: $('model').value }));

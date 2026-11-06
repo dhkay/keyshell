@@ -181,3 +181,56 @@ test('execution result selection shares only explicit active output through mask
     await select(stdout, 'password=result-secret'); await page.locator('#selection-tools:not([hidden])').waitFor(); await page.evaluate(id => window.keyshell.call('disconnect', id), session.sessionId); await page.locator('#selection-tools').waitFor({ state: 'hidden' }); await page.locator('#share-selection').evaluate(node => node.click()); assert.equal(await page.locator('#attachment').textContent(), 'No output attached'); assert.equal(await count(), 1); await page.getByLabel('Ask about this session').fill('Explain this disconnected session output'); await select(stdout, 'password=result-secret'); await page.locator('#selection-tools:not([hidden])').waitFor(); await page.locator('#share-selection').click(); await page.getByRole('button', { name: 'Preview message', exact: true }).click(); await page.getByRole('button', { name: 'Send confirmed request', exact: true }).waitFor(); assert.match(await page.getByLabel('Complete AI request').textContent(), /password=\[REDACTED\]/); await page.getByRole('button', { name: 'Cancel', exact: true }).click(); assert.equal(await count(), 1); assert.equal((await page.evaluate(() => window.keyshell.call('state'))).sessions.find(s => s.sessionId === session.sessionId).status, 'disconnected'); assert.deepEqual(commands, ['pwd', 'whoami', 'uptime']); assert.deepEqual(errors, []);
   } finally { for (const client of clients) { client.end(); client._sock?.destroy(); } if (app) { await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); }).catch(() => {}); await app.close().catch(() => {}); } await new Promise(resolve => server.close(resolve)); fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+test('settings reflect ChatGPT sign-in progress, success, account and sign-out without closing', { timeout: 30000 }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'keyshell-settings-auth-'));
+  let app;
+  try {
+    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1', KEYSHELL_TEST_LOGIN_DELAY_MS: '500', KEYSHELL_TEST_LOGIN_FAIL_ONCE: '1' } });
+    const page = await app.firstWindow();
+    await page.locator('#auth-state').filter({ hasText: 'DEVELOPMENT FIXTURE' }).waitFor();
+    await page.locator('#settings').click();
+    await page.locator('#settings-auth-label').filter({ hasText: '연결됨' }).waitFor();
+    assert.match(await page.locator('#settings-auth-detail').textContent(), /fixture@example.invalid/);
+    assert.equal(await page.locator('#settings-sign-in').isVisible(), false);
+    await page.locator('#settings-sign-out').click();
+    await page.locator('#settings-auth-label').filter({ hasText: '연결 안 됨' }).waitFor();
+    assert.equal(await page.locator('#modal').evaluate(n => n.open), true);
+    assert.equal(await page.locator('#settings-sign-out').isVisible(), false);
+    await page.locator('#settings-sign-in').click();
+    await page.locator('#settings-auth-label').filter({ hasText: '로그인 중' }).waitFor();
+    await page.locator('#settings-cancel-login').click();
+    await page.locator('#settings-auth-label').filter({ hasText: '연결 안 됨' }).waitFor();
+    await page.waitForTimeout(650);
+    assert.equal(await page.locator('#settings-auth-status').getAttribute('data-state'), 'disconnected');
+    await page.locator('#settings-sign-in').click();
+    await page.locator('#settings-auth-label').filter({ hasText: '로그인 중' }).waitFor();
+    assert.equal(await page.locator('#settings-sign-in').isDisabled(), true);
+    assert.equal(await page.locator('#settings-cancel-login').isVisible(), true);
+    await page.locator('#settings-auth-label').filter({ hasText: '로그인 실패' }).waitFor();
+    assert.equal(await page.locator('#settings-sign-in').isDisabled(), false);
+    assert.equal(await page.locator('#settings-cancel-login').isVisible(), false);
+    await page.locator('#settings-sign-in').click();
+    await page.locator('#settings-auth-label').filter({ hasText: '연결됨' }).waitFor();
+    assert.equal(await page.locator('#modal').evaluate(n => n.open), true);
+    assert.equal(await page.locator('#settings-cancel-login').isVisible(), false);
+    await page.screenshot({ path: 'docs/verification/desktop/settings-connected.png' });
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('keyshell:event', { type: 'auth-error', detail: { code: 'E-AUTH-REFRESH' } }));
+    await page.locator('#settings-auth-label').filter({ hasText: '로그인 실패' }).waitFor();
+    assert.match(await page.locator('#settings-auth-detail').textContent(), /E-AUTH-REFRESH/);
+    assert.equal(await page.locator('#settings-sign-in').isVisible(), true);
+    await page.locator('#settings-sign-in').click();
+    await page.locator('#settings-auth-label').filter({ hasText: '연결됨' }).waitFor();
+    assert.equal(await page.locator('#modal').evaluate(n => n.open), true);
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    assert.equal(await page.locator('#modal').evaluate(n => n.open), false);
+    await page.locator('[data-new]').first().click();
+    await page.getByRole('heading', { name: 'Connect to an SSH server', exact: true, level: 2 }).waitFor();
+    const state = await page.evaluate(() => window.keyshell.call('state'));
+    await app.evaluate(({ BrowserWindow }, auth) => BrowserWindow.getAllWindows()[0].webContents.send('keyshell:event', { type: 'change', detail: auth }), state.auth);
+    await page.waitForFunction(() => !document.getElementById('modal').open);
+  } finally {
+    if (app) await app.close().catch(() => {});
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
