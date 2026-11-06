@@ -1,0 +1,98 @@
+name: Development installers
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/installers.yml'
+      - 'src/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'electron-builder.cjs'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            arch: x64
+            runner: windows-latest
+            target: --win nsis --x64
+          - platform: mac
+            arch: x64
+            runner: macos-15-intel
+            target: --mac dmg --x64
+          - platform: mac
+            arch: arm64
+            runner: macos-latest
+            target: --mac dmg --arm64
+          - platform: linux
+            arch: x64
+            runner: ubuntu-24.04
+            target: --linux AppImage deb --x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - name: 개발용 단일 설치파일 생성
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: >-
+          npx electron-builder --config electron-builder.cjs
+          ${{ matrix.target }} --publish never
+          -c.linux.maintainer=dhkay
+          -c.extraMetadata.homepage=https://github.com/dhkay/keyshell
+          -c.mac.identity=-
+          '-c.artifactName=KeyShell-Development-${version}-${os}-${arch}.${ext}'
+      - run: node scripts/verify-package.cjs release-dev
+      - name: Mac 앱의 개발용 ad-hoc 서명 검증
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          app_path=$(find release-dev -maxdepth 2 -name '*.app' -print -quit)
+          test -n "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          hdiutil verify release-dev/*.dmg
+      - name: 설치파일 SHA256 기록
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const files = fs.readdirSync('release-dev').filter(n => /\.(exe|dmg|AppImage|deb)$/.test(n));
+          const expected = process.platform === 'linux' ? ['AppImage', 'deb'] : process.platform === 'darwin' ? ['dmg'] : ['exe'];
+          for (const ext of expected) if (!files.some(n => n.endsWith('.' + ext))) throw new Error('필수 설치파일 누락: ' + ext);
+          const lines = files.sort().map(n => crypto.createHash('sha256').update(fs.readFileSync('release-dev/' + n)).digest('hex') + '  ' + n);
+          fs.writeFileSync('release-dev/SHA256SUMS.txt', lines.join('\n') + '\n');
+          console.log(lines.join('\n'));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KeyShell-Development-${{ matrix.platform }}-${{ matrix.arch }}
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            release-dev/*.exe
+            release-dev/*.dmg
+            release-dev/*.AppImage
+            release-dev/*.deb
+            release-dev/SHA256SUMS.txt
