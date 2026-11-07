@@ -62,9 +62,19 @@ test('manual approval shares only its own final result once and never executes s
   assert.equal(f.calls.length, 1); const payload = JSON.stringify(f.calls[0]); assert.match(payload, /PHP 8.5 stdout/); assert.ok(!payload.includes('OTHER_SECRET')); assert.match(payload, /completed/); assert.deepEqual(f.commands, ['php -v']);
   f.ssh.emit('execution', { ...e }); await tick(); assert.equal(f.calls.length, 1);
 });
-test('uncertain command timeout halts delegation without retry', async t => {
-  const f = fixture(t, [{ action: 'run', summary: 'Check', command: 'sleep 99' }], { commandTimeoutMs: 20 }); f.start(); await tick();
-  await new Promise(resolve => setTimeout(resolve, 35)); await f.automation.running; assert.equal(f.automation.state().reason, 'result-unknown'); assert.deepEqual(f.signals, ['1']); assert.equal(f.calls.length, 1);
+test('long-running commands remain active beyond the former command and task time limits', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture(t, [{ action: 'run', summary: 'Install and verify', command: 'apt-get install -y nginx' }, { action: 'done', summary: 'Verified', command: '' }]);
+  f.start(); await tick(); t.mock.timers.tick(2 * 60 * 60 * 1000);
+  assert.equal(f.automation.state().enabled, true); assert.deepEqual(f.signals, []); assert.equal(f.commands.length, 1);
+  f.finish('Installed nginx'); await f.automation.running; assert.equal(f.automation.state().reason, 'completed');
+});
+test('delegation continues beyond thirty steps and retains its goal and progress checkpoint', async t => {
+  const steps = Array.from({ length: 35 }, (_, i) => ({ action: 'run', summary: `Completed subgoals checkpoint ${i}; next verification`, command: 'nginx -t' }));
+  const f = fixture(t, [...steps, { action: 'done', summary: 'All subgoals verified', command: '' }]); f.start();
+  for (let i = 0; i < 35; i++) { await tick(); assert.equal(f.commands.length, i + 1); f.finish(`Verified step ${i}`); }
+  await f.automation.running; assert.equal(f.automation.state().steps, 35); assert.equal(f.automation.state().reason, 'completed');
+  assert.match(f.calls[34].input.at(-1).content, /checkpoint 33/); assert.match(f.calls[34].input.at(-1).content, /Install nginx, PHP 8.5 and MariaDB/);
 });
 test('delegation refuses malformed action, hidden control and additional confirmation operations', async t => {
   for (const text of ['```json\n{}\n```', '{"action":"run","command":"whoami","summary":"ok","extra":true}', JSON.stringify({ action: 'run', command: 'whoami\r', summary: 'x' })]) assert.throws(() => action(text), { code: 'E-DELEGATION-RESPONSE' });

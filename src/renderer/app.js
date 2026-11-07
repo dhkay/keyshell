@@ -245,7 +245,7 @@ function renderSharing() {
   $('delegation-toggle').textContent = delegationState.enabled ? '위임 ON · 중지' : '위임 OFF'; $('delegation-toggle').setAttribute('aria-pressed', String(delegationState.enabled));
   $('delegation-toggle').disabled = !delegationState.enabled && (!connected || !auth.activeAccountId || !models.length || pendingRequests.has(active));
   $('delegation-status').hidden = !delegationState.enabled && !delegationState.reason;
-  const ended = { completed: '목표 완료', 'needs-input': '추가 입력 필요', stopped: '사용자가 중지함', 'step-limit': '30단계에 도달해 중지', 'time-limit': '30분에 도달해 중지', 'result-unknown': '실행 결과가 불확실하여 중지' }[delegationState.reason] || delegationState.reason;
+  const ended = { completed: '목표 완료', 'needs-input': '추가 입력 필요', stopped: '사용자가 중지함', 'result-unknown': '실행 결과가 불확실하여 중지' }[delegationState.reason] || delegationState.reason;
   $('delegation-status').textContent = delegationState.enabled ? `위임 진행 · ${delegationState.phase} · 목표: ${delegationState.goal.slice(0, 160)}` : `위임 종료 · ${ended}`;
   $('advice-toggle').disabled ||= delegationState.enabled;
   $('preview-toggle').disabled = delegationState.enabled;
@@ -284,7 +284,7 @@ async function toggleDelegation() {
   actions(body, [button('Cancel', clearModal), button('위임 내용 확인', async () => {
     const prepared = await call('delegationPrepare', { sessionId: id, model, goal: goal.value });
     const review = modal('위임 범위 확인', () => call('delegationStop'));
-    review.append(el('p', `서버: ${prepared.target.username}@${prepared.target.host}:${prepared.target.port}\n작업 목표: ${prepared.goal}`), el('div', prepared.target.fingerprint, { class: 'fingerprint' }), el('p', '이 목표를 위한 설치·설정 변경 명령을 매번 승인하지 않고 AI가 실행합니다. 현재 SSH 계정의 권한으로 서버가 변경됩니다. 실행 명령·출력·종료 상태를 표시하고 AI에 공유합니다. 최대 30단계·30분이며 완료하면 위임이 꺼집니다. 저장소 추가·비밀번호 입력·데이터 삭제 등 추가 판단이 필요하면 멈추고 질문합니다.'), el('p', '위임 중지 또는 탭·계정·모델·연결 변경 시 추가 실행을 중단하고 실행 중 명령에는 중지 신호를 보냅니다. 이미 적용한 변경은 자동으로 되돌리지 않습니다.'));
+    review.append(el('p', `서버: ${prepared.target.username}@${prepared.target.host}:${prepared.target.port}\n작업 목표: ${prepared.goal}`), el('div', prepared.target.fingerprint, { class: 'fingerprint' }), el('p', '이 목표를 위한 설치·설정 변경 명령을 매번 승인하지 않고 AI가 실행합니다. 현재 SSH 계정의 권한으로 서버가 변경됩니다. 실행 명령·출력·종료 상태를 표시하고 AI에 공유합니다. 단계·전체 시간·명령 실행 시간 제한 없이 목표를 완료하거나 직접 중지할 때까지 이어갑니다. 저장소 추가·비밀번호 입력·데이터 삭제 등 추가 판단이 필요하면 멈추고 질문합니다.'), el('p', '위임 중지 또는 탭·계정·모델·연결 변경 시 추가 실행을 중단하고 실행 중 명령에는 중지 신호를 보냅니다. 이미 적용한 변경은 자동으로 되돌리지 않습니다.'));
     const consent = field(review, '이 서버에서 위 목표의 설치·설정 변경을 AI에 위임합니다', 'delegation-consent', 'checkbox');
     const start = button('동의하고 위임 시작', async () => { start.disabled = true; delegationState = await call('delegationStart', prepared.token); $('question').value = ''; modalCancel = null; clearModal(); renderSharing(); }, 'mint');
     start.disabled = true; consent.onchange = () => { start.disabled = !consent.checked; }; actions(review, [button('Cancel', clearModal), start]);

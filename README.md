@@ -1,5 +1,9 @@
 # KeyShell
 
+[한국어](#한국어) · [English](#english)
+
+<a id="한국어"></a>
+
 Windows와 macOS용 SSH 데스크톱 앱입니다. 터미널과 AI 대화를 나누고, 선택한 출력 또는 세션별 자동 조언에 동의한 새 출력만 ChatGPT에 공유합니다. 제안된 명령은 전체 내용과 접속 대상을 확인한 뒤 한 번 실행합니다.
 
 현재 개발 중입니다. Windows x64에서 실제 SSH·화면 통합 테스트를 통과했습니다. 실제 사용자 ChatGPT 인증, macOS·arm64 실행과 서명·공증 검증은 남아 있습니다.
@@ -39,7 +43,7 @@ npm start
 SSH 연결과 ChatGPT 로그인 후 **위임 OFF**를 눌러 작업 목표를 입력합니다. 예: `nginx, PHP 8.5, MariaDB 설치 후 버전과 서비스 상태를 확인해줘`. 대상 서버·지문·목표를 확인하고 동의하면 해당 목표의 명령을 AI가 매번 승인 없이 실행합니다. 실행 명령·출력·종료 상태를 표시하고 결과를 받은 후 다음 작업을 결정합니다. 기존 일반 대화와 분리된 작업 맥락을 사용합니다.
 
 - AI는 OS와 기존 구성을 먼저 확인하고, 설치·설정 변경 및 검증을 순차적으로 요청합니다. 원격 명령은 현재 SSH 계정 권한으로 실행합니다. 비밀번호 입력이 필요한 설치는 수동 작업으로 전환합니다.
-- 목표별 최대 30단계·30분, 명령별 대기 최대 10분입니다. 완료·추가 입력 필요·불확실한 종료·AI 오류 시 자동 재시도 없이 멈춥니다.
+- 위임의 단계 수·전체 작업 시간·명령 실행 시간에는 인위적인 제한이 없습니다. 전체 계획과 누적 진행 상황을 유지하며 결과에 따라 다음 단계를 결정합니다. 완료·추가 입력 필요·불확실한 종료·AI 오류 시 자동 재시도 없이 멈춥니다.
 - **위임 ON · 중지**, 응답 취소, 탭·계정·모델·연결·대화 변경, 앱 재시작으로 추가 실행을 중단합니다. 실행 중 명령에는 TERM을 요청하지만 종료나 변경 취소를 보장하지 않으며, 이미 적용한 변경을 자동 복구하지 않습니다.
 - 삭제·대화형 명령·디스크 관리·재부팅·저장소 추가 등 탐지한 추가 확인 작업은 일반 검토로 넘깁니다. 임의 셸의 실제 효과와 목표 준수 여부를 완전히 판별하는 샌드박스는 아니므로, 위임은 해당 SSH 계정 권한으로 서버를 변경할 수 있는 기능입니다.
 - 서버 출력은 비신뢰 데이터로 처리하고 로컬 가림을 적용합니다. 가림과 위험 탐지는 완벽하지 않습니다. 외부 AI 서비스의 계정 권한·사용량 한도는 계속 적용됩니다.
@@ -93,3 +97,108 @@ npm run package:dev
 ## 라이선스
 
 [MIT](LICENSE)
+
+---
+
+<a id="english"></a>
+
+## English
+
+KeyShell is an SSH desktop application for Windows, macOS, and Linux with ChatGPT alongside the terminal. Ask questions about selected output, receive advice from newly shared SSH output, review individual commands, or delegate an installation or configuration goal.
+
+The application is under development. Test SSH servers are used to verify command execution, result analysis, cancellation, clipboard behavior, and desktop interactions. These tests do not establish successful installation on your server or replace verification with your own ChatGPT account. Development installers are not production Windows-signed or Apple-notarized; Mac development builds use ad-hoc signing.
+
+### Install or run from source
+
+Download installers from [GitHub Releases](https://github.com/dhkay/keyshell/releases):
+
+- **Windows x64:** run the `.exe` installer; Windows 10 or later.
+- **macOS:** choose the Intel `mac-x64.dmg` or Apple Silicon `mac-arm64.dmg`, then move the app to Applications; macOS 13 or later.
+- **Linux x64:** install the `.deb` on Ubuntu/Debian, or grant executable permission to the `.AppImage` and run it.
+
+To develop locally, use Node.js 22 or later:
+
+```sh
+npm ci
+npm start
+```
+
+The first launch has no saved SSH connections or AI accounts. SSH works without signing in to ChatGPT. SSH passwords and private-key passphrases are not saved. Connection profiles and trusted host keys are stored locally.
+
+ChatGPT sign-in uses the [open-source application registration flow](https://developers.openai.com/siwc/token-sharing-open-source/sign-in). Confirm your account and permissions in the browser. Access and usage limits depend on that account. Remembering the login is optional; when OS-encrypted storage is unavailable, tokens remain in memory only.
+
+### Chat and terminal sharing
+
+The controls currently use Korean labels:
+
+| Control | Meaning |
+| --- | --- |
+| **전송 전 확인** | Review before sending |
+| **AI 터미널 공유** | AI terminal sharing and automatic advice |
+| **위임** | Delegate a server task |
+| **터미널에 넣기** | Insert the command into the terminal |
+
+- **Review before sending** defaults to OFF. Enter sends your question and explicitly attached output; Shift+Enter inserts a newline. Enter used to finish Korean IME composition does not send the message. Turn review ON to inspect, edit, or cancel the complete request before sending.
+- Scroll up to keep your reading position while answers arrive. Press Enter in an empty chat input to jump to the bottom and follow new content.
+- **AI terminal sharing** defaults to OFF and requires separate consent for the current SSH session, account, model, and sharing scope. It sends newly received terminal and execution output after you enable it. It does not capture screenshots or automatically read other sessions, keyboard input, or credential storage.
+- Automatic advice collects up to 8KiB of recent output, waits for two seconds of inactivity or ten seconds of collection, and sends at least 60 seconds apart. There is no ten-request quota. Older AI context is trimmed to a recent 64KiB window with a notice; previous conversation content can also be included.
+- Automatic sharing stops when disabled, when the tab, connection, account, model, or conversation changes, on request errors, or when the renderer restarts. These preferences and sharing consent apply only to the current app run. Information already transmitted cannot be recalled.
+- Requests use local secret masking, which can miss sensitive information. Review the information you choose to share.
+
+### Command review and result analysis
+
+Use **Review & run**, inspect the complete command and SSH target, then choose **Approve & run once**. Commands such as `php -v`, `php-fpm8.5 -v`, and package installation commands are not blocked by an executable-name allowlist. Hidden control characters and malformed input are rejected; displayed risk notices do not guarantee safety.
+
+Select **실행 결과를 AI에 보내고 다음 작업 제안 받기** (“Send the execution result to AI and suggest next steps”) to analyze the final command status, exit code, and recent output up to 16KiB. This works without automatic terminal sharing, including for commands with no output or with failed or uncertain results. Suggested follow-up commands require their own approval in normal mode. Cancelled or changed contexts do not continue sharing the result.
+
+Commands run through separate noninteractive SSH exec channels. They do not inherit the interactive terminal's current directory or environment, and a previous `cd` or environment change does not persist into the next command. For interactive installers and editors, use **터미널에 넣기** and work in the terminal directly. Inserting a single-line command does not press Enter.
+
+### Delegate an installation or configuration goal
+
+Connect to SSH, sign in to ChatGPT, select a model, and click **위임 OFF**. Enter a goal, for example:
+
+> Install nginx, PHP 8.5, and MariaDB, then verify their versions and service health.
+
+Review the SSH target, fingerprint, goal, and authority to make changes, then explicitly start delegation. The AI is instructed to form an overall plan, inspect the OS and existing configuration, execute one step at a time, analyze the observed result, adjust the plan, and verify the requested outcome. Commands, results, and progress appear in the app. Delegation uses task context separate from normal chat and retains a cumulative progress checkpoint for longer tasks.
+
+- There is no arbitrary step-count, overall task-duration, or command-runtime cutoff. A task can continue beyond the former 30-step, 30-minute, and ten-minute command limits until completion or an explicit stopping condition.
+- Delegated commands run with the connected SSH account's permissions and can install software or change server configuration without individual command approvals within the consented goal.
+- **위임 ON · 중지** stops further steps and requests TERM for a command already running. Cancellation, tab/account/model/connection/conversation changes, and app restarts also stop further execution. TERM does not guarantee remote termination; changes already applied are not automatically rolled back.
+- Completion, missing required information, AI errors, and uncertain execution results end delegation without automatic replay. A normal observed execution result is required before the app accepts a completion response. Routine authorized steps are planned automatically; credentials, interactive input, or further authority may require user involvement.
+- Detected deletion, interactive commands, disk management, reboot, repository addition, and similar operations requiring further confirmation stop automatic execution for manual review. This is not a sandbox that can fully determine the effects or goal alignment of arbitrary shell commands. Output and AI responses remain untrusted data, and masking and risk detection are incomplete.
+- External AI service access, network availability, and account usage limits still apply.
+
+### Terminal basics
+
+- Drag to select and copy. Right-click to paste; Shift+right-click opens the copy/paste menu.
+- Paste with Ctrl+V, Ctrl+Shift+V, Shift+Insert, macOS Command+V, or the toolbar button. Multiline text and control characters require confirmation before pasting; single-line text is inserted without Enter.
+- With a selection, Ctrl+C, Ctrl+Insert, or Command+C copies it. Without a selection, Ctrl+C is sent to the remote program as an interrupt key.
+- Use A−/A+ or Ctrl/Command +/−/0 to adjust font size. Settings save font size and scrollback length. Clearing the screen changes the local terminal display without executing a server command.
+- Saved profiles, groups, search, reconnection, private-key authentication, resizing, and terminal control keys are supported. Full PuTTY parity is not implemented: Telnet, serial connections, port forwarding, proxies, and agent forwarding are outside the current development version's scope.
+
+### Development checks and packaging
+
+```sh
+npm test
+npm run check
+npm run build
+npm run test:desktop
+npm audit
+npm run package:dev
+```
+
+On a Linux host without a display, use `xvfb-run -a npm run test:desktop`. Login fixtures are available only in explicitly opted-in source test runs and are excluded from installers. Development packages do not install automatic updates.
+
+For signed production releases, configure platform certificates and Apple notarization credentials in the repository's `signed-release` environment, run **Signed release candidates**, verify native installation, SSH connections, and updates, then run **Publish verified signed candidates** for that exact verified commit and candidate run. The repository is selected through `GITHUB_REPOSITORY` or `KEYSHELL_RELEASE_REPOSITORY`. Missing required signing configuration fails the signed-release path. Keep signing credentials in GitHub environment secrets.
+
+### Data and execution boundaries
+
+Normal chat does not receive SSH tools or access to stored credentials. In delegation mode, the application executes structured AI command requests only after goal-specific consent. Failed requests, lost connections, and app restarts do not automatically replay commands or questions. Unknown outcomes are not presented as successful executions.
+
+Conversations, terminal output, and execution records remain in memory and are discarded when the app exits. Profiles, trusted host keys, and account registration metadata persist locally; remembered tokens use available OS encryption. Information sent to an external AI service is subject to that provider's retention and deletion policies.
+
+### License
+
+[MIT](LICENSE)
+
+[Back to 한국어](#한국어)
