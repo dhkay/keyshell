@@ -27,7 +27,7 @@ function button(text, action, cls = '') { const b = el('button', text, { type: '
 const errorText = code => ({
   'E-AI-REDACTION-CHANGED': '민감정보 보호 목록이 바뀌어 전송을 멈췄습니다. 다시 전송해 주세요.',
   'E-AI-MASK-SIZE': '민감정보 검사를 완료할 수 없어 전송하지 않았습니다. 첨부를 줄여 주세요.',
-  'E-DELEGATION-NOT-ARMED': '이 서버에서 위임을 ON으로 켠 뒤 요청해 주세요.',
+  'E-DELEGATION-NOT-ARMED': '이 서버에서 AI 권한을 ON으로 켠 뒤 요청해 주세요.',
   'E-TERM-NOT-READY': '터미널이 셸 명령을 받을 준비인지 확인할 수 없습니다. 입력 중인 내용과 실행 중인 프로그램을 먼저 확인해 주세요. AI 공동 조작은 Bash·Zsh 프롬프트 연동이 필요합니다.',
   'E-TERM-AI-BUSY': 'AI가 같은 터미널을 사용 중입니다. 직접 조작 버튼으로 조작권을 가져올 수 있습니다.',
   'E-CLIPBOARD-READ': '클립보드의 텍스트를 읽지 못했습니다. 내용을 다시 복사한 뒤 붙여넣어 주세요.',
@@ -239,24 +239,24 @@ function renderSharing() {
   const connected = sessions.get(active)?.meta.status === 'connected';
   $('preview-toggle').textContent = `전송 전 확인 ${previewEnabled ? 'ON' : 'OFF'}`; $('preview-toggle').setAttribute('aria-pressed', String(previewEnabled)); $('preview-toggle').title = 'AI로 보내기 전 질문·첨부·이전 대화의 내용을 확인합니다. 화면 공유 기능이 아닙니다.';
   const delegateMode = delegationState.armed || delegationState.enabled;
-  $('send-message').textContent = delegateMode ? '위임 ↵' : previewEnabled ? '내용 확인 →' : '전송 ↵'; $('send-message').setAttribute('aria-label', delegateMode ? 'Delegate message' : previewEnabled ? 'Preview message' : 'Send message');
-  $('send-message').disabled = delegationState.enabled || pendingRequests.has(active) || directRequests.has(active);
-  $('send-hint').textContent = delegateMode ? 'Enter: 채팅 내용을 목표로 위임 · Shift+Enter: 줄바꿈' : previewEnabled ? 'Enter: 전송 내용 확인 · Shift+Enter: 줄바꿈' : 'Enter: 바로 전송 · Shift+Enter: 줄바꿈';
+  $('send-message').textContent = delegateMode ? '전송 ↵' : previewEnabled ? '내용 확인 →' : '전송 ↵'; $('send-message').setAttribute('aria-label', delegateMode ? 'Send AI-authorized message' : previewEnabled ? 'Preview message' : 'Send message');
+  $('send-message').disabled = (delegateMode ? false : pendingRequests.has(active)) || directRequests.has(active);
+  $('send-hint').textContent = delegateMode ? 'Enter: AI와 대화 · 작업 요청 시 순차 실행 · Shift+Enter: 줄바꿈' : previewEnabled ? 'Enter: 전송 내용 확인 · Shift+Enter: 줄바꿈' : 'Enter: 바로 전송 · Shift+Enter: 줄바꿈';
   $('advice-toggle').textContent = `AI 터미널 공유 ${adviceState.enabled ? 'ON · 중지' : 'OFF'}`; $('advice-toggle').setAttribute('aria-pressed', String(adviceState.enabled));
   $('advice-toggle').disabled = !adviceState.enabled && (!connected || !auth.activeAccountId || !models.length);
   $('advice-toggle').title = adviceState.enabled ? '이후 자동 전송을 중지합니다.' : !connected ? '먼저 SSH 세션에 연결해 주세요.' : !auth.activeAccountId || !models.length ? 'ChatGPT 로그인과 모델 선택이 필요합니다.' : '공유할 계정·모델·출력 범위를 확인한 뒤 켤 수 있습니다.';
   $('advice-status').hidden = !adviceState.enabled && !adviceState.reason;
   const reason = { stopped: '사용자가 중지했습니다.', cancelled: '응답을 취소했습니다.', 'tab-changed': '다른 탭으로 이동했습니다.', 'tab-closed': '세션 탭을 닫았습니다.', 'model-changed': '모델이 바뀌었습니다.', 'account-changed': '계정 또는 인증 상태가 바뀌었습니다.', 'connection-changed': 'SSH 연결이 바뀌거나 끊겼습니다.', 'context-changed': '공유 대상이 바뀌었습니다.', 'conversation-reset': '새 대화를 시작했습니다.', 'request-failed': 'AI 요청이 실패했습니다. 다시 켜기 전 연결과 사용 한도를 확인하세요.', 'renderer-restarted': '화면이 다시 시작됐습니다.' }[adviceState.reason] || '다시 켜려면 공유 범위를 확인하세요.';
   $('advice-status').textContent = adviceState.enabled ? '새 SSH 출력 자동 공유 중 · 횟수 제한 없음' : `자동 공유 중지 · ${reason}${adviceState.error ? ` ${errorText(adviceState.error)}` : ''}`;
-  $('sharing-privacy').textContent = delegationState.enabled ? '위임 목표와 실행 명령·결과를 AI에 공유합니다. IP·비밀번호·인증키 등은 전송 전에 ****로 가립니다.' : adviceState.enabled ? '현재 SSH 출력과 이 대화의 이전 내용만 공유합니다. IP·비밀번호·인증키 등은 전송 전에 ****로 가립니다.' : '질문·직접 첨부·이전 대화를 전송합니다. IP·비밀번호·인증키 등은 전송 전에 ****로 가립니다.';
-  $('delegation-toggle').textContent = delegationState.enabled ? '위임 ON · 중지' : delegationState.armed ? '위임 ON' : '위임 OFF'; $('delegation-toggle').setAttribute('aria-pressed', String(delegateMode));
-  $('question').placeholder = delegateMode ? '이 서버에서 할 작업을 입력하세요…' : 'Ask about this session…';
+  $('sharing-privacy').textContent = delegationState.enabled ? 'AI 권한을 켠 채팅과 실행 명령·결과를 AI에 공유합니다. IP·비밀번호·인증키 등은 전송 전에 ****로 가립니다.' : adviceState.enabled ? '현재 SSH 출력과 이 대화의 이전 내용만 공유합니다. IP·비밀번호·인증키 등은 전송 전에 ****로 가립니다.' : '질문·직접 첨부·이전 대화를 전송합니다. IP·비밀번호·인증키 등은 전송 전에 ****로 가립니다.';
+  $('delegation-toggle').textContent = delegationState.enabled ? 'AI 권한 ON · 끄기' : delegationState.armed ? 'AI 권한 ON' : 'AI 권한 OFF'; $('delegation-toggle').setAttribute('aria-pressed', String(delegateMode));
+  $('question').placeholder = delegateMode ? '이 서버에 대해 질문하거나 작업을 요청하세요…' : 'Ask about this session…';
   $('delegation-toggle').disabled = !delegateMode && (!connected || !auth.activeAccountId || !models.length || pendingRequests.has(active));
   $('delegation-status').hidden = !delegateMode && !delegationState.reason;
   const ended = { completed: '목표 완료', 'manual-takeover': '직접 조작으로 전환', 'needs-input': '추가 입력 필요', stopped: '사용자가 중지함', 'result-unknown': '실행 결과가 불확실하여 중지' }[delegationState.reason] || delegationState.reason;
-  $('delegation-status').textContent = delegationState.enabled ? `위임 진행 · ${delegationState.phase} · 작업 ${delegationState.currentTask || 0}/${delegationState.tasks?.length || 0}: ${delegationState.tasks?.[delegationState.currentTask - 1]?.title || "목록 작성 중"}` : delegationState.armed ? `${delegationState.reason === 'completed' ? '목표 완료 · ' : delegationState.reason === 'needs-input' ? '작업 일시 중지 · ' : delegationState.reason === 'result-unknown' ? '실행 결과 확인 필요 · ' : delegationState.reason === 'manual-takeover' ? '직접 조작 중 · ' : delegationState.reason === 'cancelled' ? '작업 취소됨 · ' : ''}위임 ON` : `위임 종료 · ${ended}`;
+  $('delegation-status').textContent = delegationState.enabled ? `AI 작업 진행 · ${delegationState.phase} · 작업 ${delegationState.currentTask || 0}/${delegationState.tasks?.length || 0}: ${delegationState.tasks?.[delegationState.currentTask - 1]?.title || "목록 작성 중"}` : delegationState.armed ? `${delegationState.reason === 'completed' ? '목표 완료 · ' : delegationState.reason === 'needs-input' ? '작업 일시 중지 · ' : delegationState.reason === 'result-unknown' ? '실행 결과 확인 필요 · ' : delegationState.reason === 'manual-takeover' ? '직접 조작 중 · ' : delegationState.reason === 'cancelled' ? '작업 취소됨 · ' : ''}AI 권한 ON` : `AI 작업 종료 · ${ended}`;
   $('advice-toggle').disabled ||= delegateMode;
-  $('preview-toggle').disabled = delegationState.enabled;
+  $('preview-toggle').disabled = delegateMode;
   const shared = sessions.get(active)?.meta;
   $('terminal-take-control').hidden = !shared?.terminalInputLocked;
   $('terminal-owner').textContent = shared?.sharedTerminal ? shared.terminalInputLocked ? 'AI 조작 중' : shared.terminalReady ? '함께 쓰는 터미널' : shared.terminalIntegration === 'unsupported' ? '직접 조작 · 셸 연동 미지원' : '직접 조작' : '';
@@ -265,9 +265,8 @@ function renderSharing() {
 }
 async function submitMessage() {
   if (!$('question').value.trim()) { bottomOfChat(); return; }
-  if (delegationState.enabled) return notice('위임 중에는 목표를 바꾸지 않습니다. 위임을 중지한 뒤 새 목표를 입력해 주세요.');
-  if (pendingRequests.has(active) || directRequests.has(active)) return;
   if (delegationState.armed) return sendDelegation();
+  if (pendingRequests.has(active) || directRequests.has(active)) return;
   if (previewEnabled) return previewMessage();
   if (!auth.activeAccountId || !models.length) return notice('Sign in and select an authorized AI model first.');
   const sessionId = active, question = $('question').value, selectedAttachment = attachment;
@@ -290,15 +289,16 @@ async function toggleAdvice() {
 async function toggleDelegation() {
   if (delegationState.armed || delegationState.enabled) { delegationState = await call('delegationStop'); renderSharing(); return; }
   delegationState = await call('delegationArm', { sessionId: active, model: $('model').value });
+  if (previewEnabled) { await call('previewMode', false); previewEnabled = false; }
   renderSharing(); $('question').focus();
 }
 async function sendDelegation() {
-  const id = active, goal = $('question').value;
+  const id = active, goal = $('question').value, selectedAttachment = attachment;
   if (!delegationState.armed || !goal.trim() || directRequests.has(id)) return;
   directRequests.set(id, { question: goal }); renderSharing();
   try {
-    delegationState = await call('delegationSubmit', { sessionId: id, model: $('model').value, goal });
-    if ($('question').value === goal) $('question').value = '';
+    delegationState = await call('delegationSubmit', { sessionId: id, model: $('model').value, goal, attachments: selectedAttachment ? [{ ...selectedAttachment }] : [] });
+    if ($('question').value === goal) $('question').value = ''; if (attachment === selectedAttachment) { attachment = null; renderAttachment(); }
   } finally { directRequests.delete(id); renderSharing(); }
 }
 async function showExecution(command) {

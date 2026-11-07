@@ -96,7 +96,7 @@ test('one ON action arms the current server for multiple goals, with no per-goal
   f.automation.arm(input); f.automation.arm(input); assert.equal(f.calls.length, 0); assert.equal(notices.length, 1);
   f.automation.submit(input); await f.automation.running; assert.equal(f.automation.state().armed, true);
   f.automation.submit({ ...input, goal: 'Version 1.28' }); await f.automation.running; assert.equal(f.calls.length, 4);
-  assert.equal(notices.filter(n => n.startsWith('위임 ON')).length, 1);
+  assert.equal(notices.filter(n => n.startsWith('AI 권한 ON')).length, 1);
   f.automation.stop(); assert.equal(f.automation.state().armed, false); assert.throws(() => f.automation.submit(input), { code: 'E-DELEGATION-NOT-ARMED' });
 });
 test('idle delegation mode is revoked on account and connection changes', t => {
@@ -156,4 +156,32 @@ test('repeated invalid planning pauses the current task while leaving the same s
   const f = fixture(t, [plan, plan, plan, plan]);
   f.automation.arm({ sessionId: 'first', model: 'model' }); f.automation.submit({ sessionId: 'first', model: 'model', goal: '서버 점검' });
   await f.automation.running; assert.deepEqual(f.commands, []); assert.equal(f.automation.state().reason, 'needs-input'); assert.equal(f.automation.state().armed, true);
+});
+
+test('AI authority answers a normal chat message, remembers it, then executes a requested server task', async t => {
+  const f = fixture(t, [
+    { action: 'reply', summary: '현재 세션에서 작업을 도와드릴게요.', command: '' },
+    { action: 'plan', summary: '점검 순서', command: '', tasks: ['OS 확인'] },
+    { action: 'run', task: 1, summary: 'OS 확인', command: 'cat /etc/os-release' },
+    { action: 'done', task: 1, summary: '점검 완료', command: '' }
+  ]);
+  f.automation.arm({ sessionId: 'first', model: 'model' });
+  const notices = []; f.automation.on('notice', n => notices.push(n.text));
+  f.automation.submit({ sessionId: 'first', model: 'model', goal: '무엇을 할 수 있어?' }); await f.automation.running;
+  assert.deepEqual(f.commands, []); assert.match(notices.join('\n'), /도와드릴게요/); assert.equal(f.automation.state().armed, true);
+  f.automation.submit({ sessionId: 'first', model: 'model', goal: '서버 OS를 확인해줘' }); await tick();
+  assert.deepEqual(f.commands, ['cat /etc/os-release']); assert.match(f.calls[1].input.at(-1).content, /무엇을 할 수 있어/);
+  f.finish('Ubuntu'); await f.automation.running; assert.equal(f.automation.state().reason, 'completed');
+});
+
+test('AI authority accepts a user follow-up during a running command and reads it before the next decision', async t => {
+  const f = fixture(t, [
+    { action: 'plan', summary: '점검', command: '', tasks: ['OS 확인'] },
+    { action: 'run', task: 1, summary: 'OS 확인', command: 'cat /etc/os-release' },
+    { action: 'done', task: 1, summary: '추가 질문까지 확인했습니다', command: '' }
+  ]);
+  f.automation.arm({ sessionId: 'first', model: 'model' }); f.automation.submit({ sessionId: 'first', model: 'model', goal: '서버를 점검해줘' }); await tick();
+  f.automation.submit({ sessionId: 'first', model: 'model', goal: 'Ubuntu 지원 기간도 함께 알려줘' });
+  assert.deepEqual(f.commands, ['cat /etc/os-release']); f.finish('Ubuntu'); await f.automation.running;
+  assert.match(f.calls[2].input.at(-1).content, /Ubuntu 지원 기간도 함께 알려줘/); assert.deepEqual(f.commands, ['cat /etc/os-release']);
 });
