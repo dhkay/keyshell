@@ -29,7 +29,8 @@ else app.whenReady().then(async () => {
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   window.webContents.session.setPermissionRequestHandler((_wc, _p, callback) => callback(false));
   window.webContents.session.setPermissionCheckHandler(() => false);
-  const store = new Store(app.getPath('userData')), ssh = new SSHService({ store });
+  // Packaged apps always share the interactive terminal; opt-out is source-test-only.
+  const store = new Store(app.getPath('userData')), ssh = new SSHService({ sharedTerminal: !(!app.isPackaged && process.env.KEYSHELL_TEST_LEGACY_EXEC === '1'), store });
   const auth = new AuthService({ store: new CredentialStore(app.getPath('userData'), safeStorage), openBrowser: async value => { const u = new URL(value); if (u.origin !== 'https://auth.openai.com' || u.pathname !== '/api/accounts/authorize' || u.username || u.password) throw new Error('E-AUTH-URL'); await shell.openExternal(value); } });
   const ai = new AIService({ auth });
   // Explicit source-only fixture; cannot override endpoints or inject executable code.

@@ -25,7 +25,7 @@ test('desktop UI: actual SSH, trust, selection, masked sharing, exec, paste and 
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   let app;
   try {
-    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1' } });
+    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_LEGACY_EXEC: '1', KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1' } });
     const page = await app.firstWindow(); page.on('pageerror', e => errors.push(e.message)); page.on('console', msg => { if (msg.type() === 'error') errors.push(msg.text()); });
     await page.locator('#auth-state').filter({ hasText: 'DEVELOPMENT FIXTURE' }).waitFor(); await page.locator('#preview-toggle').click();
     assert.equal(await page.locator('.profile-row').count(), 0);
@@ -109,7 +109,7 @@ test('default source launch is empty and real SSH works without AI sign-in', { t
   const server = new Server({ hostKeys: [key] }, client => {
     clients.add(client); client.on('error', () => {}); client.on('close', () => clients.delete(client));
     client.on('authentication', ctx => ctx.method === 'password' ? ctx.accept() : ctx.reject());
-    client.on('ready', () => client.on('session', accept => { const session = accept(); session.on('pty', accept => accept()); session.on('shell', accept => accept().write('Real SSH without AI\r\n')); }));
+    client.on('ready', () => client.on('session', accept => { const session = accept(); session.on('pty', accept => accept()); session.on('shell', accept => { const stream = accept(); stream.write('Real SSH without AI\r\n'); stream.on('data', data => { const init = /__KS_INIT_([a-f0-9]{48})/.exec(data.toString()); if (init) stream.write(`\x1eKS:${init[1]}:I\x1f\x1eKS:${init[1]}:P\x1f$ `); }); }); }));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); let app;
   try {
@@ -122,6 +122,7 @@ test('default source launch is empty and real SSH works without AI sign-in', { t
     assert.match(await page.locator('#auth-state').textContent(), /Not signed in/);
     await page.reload(); await page.locator('#recovery:not([hidden])').waitFor(); assert.match(await page.locator('#recovery').textContent(), /output is not recovered/); assert.equal((await page.evaluate(() => window.keyshell.call('state'))).sessions.filter(s => s.status === 'connected').length, 0); assert.equal(await page.locator('#session-count').textContent(), '0 active sessions');
     await page.locator('#tabs .tab button').first().click(); await page.getByRole('button', { name: 'Reconnect', exact: true }).click(); await page.getByLabel('Password', { exact: true }).fill('test-only'); await page.getByRole('button', { name: 'Connect', exact: true }).click(); await page.locator('#connection-state').filter({ hasText: /^connected$/ }).waitFor();
+    await page.waitForFunction(async () => (await window.keyshell.call('state')).sessions.some(s => s.status === 'connected' && s.terminalReady));
     const pending = await page.evaluate(async () => { const s = (await window.keyshell.call('state')).sessions.find(s => s.status === 'connected'); return window.keyshell.call('execution', { id: s.sessionId, command: 'pwd' }); });
     const crashed = page.waitForEvent('crash'); await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer()); await crashed;
     const recovered = await app.evaluate(async ({ BrowserWindow }) => { const wc = BrowserWindow.getAllWindows()[0].webContents; await new Promise(resolve => { wc.once('did-finish-load', resolve); wc.reload(); }); return wc.executeJavaScript('window.keyshell.call("state")'); }); assert.equal(recovered.sessions.filter(s => s.status === 'connected').length, 0); assert.ok(recovered.executions.every(e => e.status !== 'pending'));
@@ -143,7 +144,7 @@ test('execution result selection shares only explicit active output through mask
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); let app;
   try {
-    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1' } });
+    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_LEGACY_EXEC: '1', KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1' } });
     const page = await app.firstWindow(), errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.locator('#auth-state').filter({ hasText: 'DEVELOPMENT FIXTURE' }).waitFor(); await page.locator('#preview-toggle').click();
     // Spy at the existing development fixture's inference fetch boundary, never production IPC.
@@ -186,7 +187,7 @@ test('settings reflect ChatGPT sign-in progress, success, account and sign-out w
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'keyshell-settings-auth-'));
   let app;
   try {
-    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1', KEYSHELL_TEST_LOGIN_HOLD: '1', KEYSHELL_TEST_LOGIN_FAIL_ONCE: '1' } });
+    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_LEGACY_EXEC: '1', KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1', KEYSHELL_TEST_LOGIN_HOLD: '1', KEYSHELL_TEST_LOGIN_FAIL_ONCE: '1' } });
     const page = await app.firstWindow();
     const releaseLogin = () => app.evaluate((_electron, modulePath) => process.mainModule.require(modulePath).releaseLogin(), require.resolve('../src/main/test-fixture.cjs'));
     await page.locator('#auth-state').filter({ hasText: 'DEVELOPMENT FIXTURE' }).waitFor();
@@ -254,7 +255,7 @@ test('AI sharing modes: Enter sends once, IME and Shift+Enter do not send, auto 
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
-    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1' } });
+    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_LEGACY_EXEC: '1', KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1' } });
     const page = await app.firstWindow(), errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.locator('#auth-state').filter({ hasText: 'DEVELOPMENT FIXTURE' }).waitFor();
     await app.evaluate(({ app }, modulePath) => { const { AIService } = process.mainModule.require(modulePath), original = AIService.prototype.preview; app.__sharingPayloads = []; AIService.prototype.preview = function(input) { if (!this.__sharingSpy) { this.__sharingSpy = true; const fetch = this.fetch; this.fetch = async (url, options) => { if (url.endsWith('/responses')) { app.__sharingPayloads.push(JSON.parse(options.body)); if (app.__holdNextSharingResponse) { app.__holdNextSharingResponse = false; return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(new Error('test cancellation')), { once: true })); } } return fetch(url, options); }; } if (app.__holdNextSharingToken) { app.__holdNextSharingToken = false; const originalAccess = this.auth.accessToken; this.auth.accessToken = function() { this.accessToken = originalAccess; return new Promise(resolve => { app.__releaseSharingToken = resolve; }); }; } return original.call(this, input); }; }, require.resolve('../src/main/ai-service.cjs'));
@@ -333,7 +334,7 @@ test('terminal clipboard and reviewed commands: real OS paste shortcuts, right c
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const waitInput = async expected => { for (let i = 0; i < 100; i++) { if (inputs.join('') === expected) return; await new Promise(resolve => setTimeout(resolve, 20)); } assert.equal(inputs.join(''), expected); };
   try {
-    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1' } });
+    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_LEGACY_EXEC: '1', KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1' } });
     const page = await app.firstWindow(), errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.locator('#auth-state').filter({ hasText: 'DEVELOPMENT FIXTURE' }).waitFor();
     await app.evaluate((_electron, modulePath) => { const { AIService } = process.mainModule.require(modulePath), preview = AIService.prototype.preview; AIService.prototype.preview = function(...args) { const original = this.fetch; if (!this.__phpTest) { this.__phpTest = true; this.fetch = async (url, options) => url.endsWith('/responses') ? { ok: true, body: (async function* () { yield Buffer.from('data: {"type":"response.output_text.delta","delta":"```sh\\nphp-fpm8.5 -v\\n```"}\n\ndata: {"type":"response.completed"}\n\n'); })() } : original(url, options); } return preview.apply(this, args); }; }, require.resolve('../src/main/ai-service.cjs'));
@@ -379,7 +380,7 @@ test('delegation and chat scroll: held reading position, empty Enter, result fol
     }));
   }); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
-    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1' } });
+    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_LEGACY_EXEC: '1', KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1' } });
     const page = await app.firstWindow(), errors = []; page.on('pageerror', e => errors.push(e.message)); await page.locator('#auth-state').filter({ hasText: 'DEVELOPMENT FIXTURE' }).waitFor();
     await app.evaluate(({ app }, modulePath) => {
       const { AIService } = process.mainModule.require(modulePath), original = AIService.prototype.preview;
@@ -438,4 +439,69 @@ test('delegation and chat scroll: held reading position, empty Enter, result fol
     await page.getByRole('button', { name: 'Delegation SSH', exact: true }).last().click(); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'false');
     await page.screenshot({ path: path.resolve('docs/verification/desktop/delegation.png') }); assert.deepEqual(errors, []);
   } finally { for (const client of clients) { client.end(); client._sock?.destroy(); } if (app) { await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); }).catch(() => {}); await app.close().catch(() => {}); } await new Promise(resolve => server.close(resolve)); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('shared terminal: manual and AI use one visible PTY, preserve context and allow takeover', { timeout: 120000 }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'keyshell-shared-ui-')), clients = new Set(), commands = []; let app, execs = 0, shells = 0, cwd = '/home/tester', environment = '', secret, held, input = '';
+  const key = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs1', format: 'pem' });
+  const server = new Server({ hostKeys: [key] }, client => {
+    clients.add(client); client.on('close', () => clients.delete(client)); client.on('error', () => {}); client.on('authentication', ctx => ctx.accept());
+    client.on('ready', () => client.on('session', accept => {
+      const session = accept(); session.on('pty', accept => accept()); session.on('window-change', accept => accept?.()); session.on('exec', (_a, reject) => { execs++; reject(); });
+      session.on('shell', accept => {
+        shells++; const stream = accept(); stream.on('error', () => {}); const frame = v => `\x1eKS:${secret}:${v}\x1f`;
+        stream.on('data', bytes => {
+          let data = bytes.toString();
+          if (data.includes('\x03')) { input = ''; held = null; stream.write('^C\r\n' + frame('P') + 'tester$ '); data = data.slice(data.lastIndexOf('\x03') + 1); if (!data) return; }
+          input += data;
+          while (input.includes('\r')) {
+            const i = input.indexOf('\r'), line = input.slice(0, i); input = input.slice(i + 1);
+            const init = /__KS_INIT_([a-f0-9]{48})/.exec(line);
+            if (init) { secret = init[1]; stream.write('Shared terminal fixture\r\n' + frame('I') + frame('P') + 'tester$ '); continue; }
+            const wrapper = /^ builtin printf '\\036KS:[a-f0-9]{48}:S:([a-f0-9]{48})\\037'; builtin eval ([\s\S]*); __ks_finish_[a-f0-9]{48} "\$\?" '[a-f0-9]{48}'$/.exec(line);
+            let command = line, nonce;
+            if (wrapper) { nonce = wrapper[1]; command = wrapper[2].slice(1, -1).replace(/'\\''/g, "'"); commands.push(command); stream.write(line + '\r\n' + frame('S:' + nonce)); }
+            else stream.write(line + '\r\n');
+            if (command === 'sleep 99') { held = nonce; continue; }
+            if (command.startsWith('cd ')) { cwd = command.slice(3).split(';')[0].trim(); }
+            const setting = /KEYSHELL_UI_SHARED=([a-z]+)/.exec(command); if (setting) environment = setting[1];
+            if (command === 'pwd') stream.write(cwd + '\r\n');
+            if (command.startsWith('printf')) stream.write(environment + '\r\n');
+            if (nonce) stream.write(frame('D:' + nonce + ':0'));
+            stream.write(frame('P') + 'tester$ ');
+          }
+        });
+      });
+    }));
+  }); await new Promise(r => server.listen(0, '127.0.0.1', r));
+  try {
+    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_LEGACY_EXEC: '0', KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1' } });
+    const page = await app.firstWindow(), errors = []; page.on('pageerror', e => errors.push(e.message)); await page.locator('#auth-state').filter({ hasText: 'DEVELOPMENT FIXTURE' }).waitFor();
+    await app.evaluate(({ app }, modulePath) => {
+      const { AIService } = process.mainModule.require(modulePath), original = AIService.prototype.preview; app.__sharedPayloads = []; app.__sharedSteps = [ { action: 'run', summary: '현재 경로 확인', command: 'pwd' }, { action: 'run', summary: '조작권 전환 확인', command: 'sleep 99' }, { action: 'run', summary: '실행되면 안 됨', command: 'whoami' } ];
+      AIService.prototype.preview = function(...args) { if (!this.__sharedFixture) { this.__sharedFixture = true; this.fetch = async (_url, options) => { const payload = JSON.parse(options.body); app.__sharedPayloads.push(payload); if (app.__sharedHoldNext && payload.instructions.includes('user-delegated')) { app.__sharedHoldNext = false; return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => { app.__sharedPlanningCancelled = true; reject(new Error('cancelled fixture')); }, { once: true })); } const text = payload.instructions.includes('user-delegated') ? JSON.stringify(app.__sharedSteps.shift()) : payload.input.at(-1).content.includes('최종 실행 결과') ? '공유 터미널의 결과를 확인했습니다.' : '```sh\npwd\n```'; return { ok: true, body: (async function* () { yield Buffer.from('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: text }) + '\n\ndata: {"type":"response.completed"}\n\n'); })() }; }; } return original.apply(this, args); };
+    }, require.resolve('../src/main/ai-service.cjs'));
+    await page.locator('[data-new]').first().click(); await page.getByLabel('Connection name', { exact: true }).fill('Shared PTY'); await page.getByLabel('Host', { exact: true }).fill('127.0.0.1'); await page.getByLabel('Port', { exact: true }).fill(String(server.address().port)); await page.getByLabel('Username', { exact: true }).fill('tester'); await page.getByLabel('Password', { exact: true }).fill('test-only'); await page.getByRole('button', { name: 'Connect', exact: true }).click(); await page.getByRole('button', { name: 'Trust & connect' }).click();
+    const ready = () => page.locator('#terminal-owner').filter({ hasText: '함께 쓰는 터미널' }).waitFor(); await ready();
+    const terminal = page.locator('.terminal-pane:not([hidden]) textarea'); await terminal.focus(); await page.keyboard.type('cd /srv/app'); await page.keyboard.press('Enter'); await ready();
+    const question = page.getByLabel('Ask about this session'); await question.fill('현재 경로 확인'); await question.press('Enter'); await page.getByRole('button', { name: 'Review & run', exact: true }).click(); assert.match(await page.locator('#modal-body').textContent(), /현재 화면의 SSH 터미널/); await page.getByRole('button', { name: 'Approve & run once', exact: true }).click();
+    await page.locator('#messages .answer').filter({ hasText: '공유 터미널의 결과' }).waitFor(); await ready();
+    assert.equal(await page.locator('#executions').isVisible(), false); await page.waitForFunction(() => document.querySelector('.terminal-pane:not([hidden]) .xterm-rows').textContent.includes('/srv/app'));
+    const state = await page.evaluate(() => window.keyshell.call('state')), id = state.sessions[0].sessionId;
+    assert.equal(state.executions[0].context.channel, 'shared-terminal'); assert.equal(state.executions[0].status, 'completed');
+    assert.match(JSON.stringify(await app.evaluate(({ app }) => app.__sharedPayloads.at(-1))), /\/srv\/app/);
+    const run = async command => { await page.evaluate(async ({ id, command }) => { const e = await window.keyshell.call('execution', { id, command }); await window.keyshell.call('approve', e.token); }, { id, command }); await ready(); };
+    await run('cd /srv/ai; export KEYSHELL_UI_SHARED=ai'); await run('printf "%s" "$KEYSHELL_UI_SHARED"');
+    await terminal.focus(); await page.keyboard.type('pwd'); await page.keyboard.press('Enter'); await ready(); await page.waitForFunction(() => document.querySelector('.terminal-pane:not([hidden]) .xterm-rows').textContent.includes('/srv/ai'));
+    await page.locator('#delegation-toggle').click(); await question.fill('현재 경로를 확인하고 대기 작업을 실행해줘'); await question.press('Enter'); await page.getByLabel('이 서버에서 위 목표의 설치·설정 변경을 AI에 위임합니다', { exact: true }).check(); await page.getByRole('button', { name: '동의하고 위임 시작', exact: true }).click();
+    await page.locator('#terminal-take-control').waitFor(); await page.waitForFunction(() => document.querySelector('.terminal-pane:not([hidden]) .xterm-rows').textContent.includes('sleep 99'));
+    assert.equal(await page.evaluate(async id => { try { await window.keyshell.call('write', { id, data: 'overlap' }); return false; } catch { return true; } }, id), true);
+    await page.locator('#terminal-take-control').click(); await ready(); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'false'); assert.equal(await page.locator('#terminal-take-control').isVisible(), false);
+    await app.evaluate(({ app }) => { app.__sharedHoldNext = true; });
+    await page.locator('#delegation-toggle').click(); await question.fill('다음 점검을 계획해줘'); await question.press('Enter'); await page.getByLabel('이 서버에서 위 목표의 설치·설정 변경을 AI에 위임합니다', { exact: true }).check(); await page.getByRole('button', { name: '동의하고 위임 시작', exact: true }).click(); await page.locator('#cancel-ai').waitFor();
+    await terminal.focus(); await page.keyboard.type('echo manual'); await page.keyboard.press('Enter'); await ready(); await page.waitForFunction(() => document.getElementById('delegation-toggle').getAttribute('aria-pressed') === 'false');
+    assert.equal(await app.evaluate(({ app }) => app.__sharedPlanningCancelled), true);
+    assert.ok(!commands.includes('whoami')); assert.equal(execs, 0); assert.equal(shells, 1); assert.equal(held, null);
+    assert.equal(await page.locator('#executions').isVisible(), false); assert.deepEqual(errors, []); await page.screenshot({ path: path.resolve('docs/verification/desktop/shared-terminal.png') });
+  } finally { for (const c of clients) { c.end(); c._sock?.destroy(); } if (app) { await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); }).catch(() => {}); await app.close().catch(() => {}); } await new Promise(r => server.close(r)); fs.rmSync(directory, { recursive: true, force: true }); }
 });

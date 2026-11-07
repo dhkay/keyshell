@@ -25,6 +25,8 @@ function el(tag, text, attrs = {}) { const node = document.createElement(tag); i
 const icon = name => el('img', null, { src: `assets/${name}`, alt: '', class: 'design-icon' });
 function button(text, action, cls = '') { const b = el('button', text, { type: 'button', class: cls }); b.addEventListener('click', safe(action)); return b; }
 const errorText = code => ({
+  'E-TERM-NOT-READY': '터미널이 셸 명령을 받을 준비인지 확인할 수 없습니다. 입력 중인 내용과 실행 중인 프로그램을 먼저 확인해 주세요. AI 공동 조작은 Bash·Zsh 프롬프트 연동이 필요합니다.',
+  'E-TERM-AI-BUSY': 'AI가 같은 터미널을 사용 중입니다. 직접 조작 버튼으로 조작권을 가져올 수 있습니다.',
   'E-CLIPBOARD-READ': '클립보드의 텍스트를 읽지 못했습니다. 내용을 다시 복사한 뒤 붙여넣어 주세요.',
   'E-CLIPBOARD-WRITE': '클립보드에 복사하지 못했습니다. 다시 선택해 복사해 주세요.',
   'E-AI-BUSY': 'AI 응답이 진행 중입니다. 완료를 기다리거나 응답을 취소한 뒤 다시 보내세요.',
@@ -145,9 +147,9 @@ async function closeSession(id) {
   if (['connected', 'connecting', 'authenticating', 'host-key-required'].includes(s.meta.status)) { const body = modal('Close SSH session?'); body.append(el('p', `${s.meta.username}@${s.meta.host}:${s.meta.port}. Pending approvals will be discarded. Running results may be unknown.`)); actions(body, [button('Cancel', clearModal), button('Close session', async () => { clearModal(); await close(); }, 'mint')]); } else await close();
 }
 function ensureSession(meta) {
-  if (sessions.has(meta.sessionId)) { sessions.get(meta.sessionId).meta = meta; sessions.get(meta.sessionId).term.options.disableStdin = meta.status !== 'connected'; return sessions.get(meta.sessionId); }
+  if (sessions.has(meta.sessionId)) { sessions.get(meta.sessionId).meta = meta; sessions.get(meta.sessionId).term.options.disableStdin = meta.status !== 'connected' || !!meta.terminalInputLocked; return sessions.get(meta.sessionId); }
   const pane = el('div', null, { class: 'terminal-pane', 'data-session': meta.sessionId }); pane.hidden = true; $('terminals').append(pane);
-  const term = new Terminal({ disableStdin: meta.status !== 'connected', ...terminalOptions, fontFamily: 'Consolas, Liberation Mono, monospace', allowProposedApi: false, theme: { background: '#080b0d', foreground: '#e7e8e9', cursor: '#8fffc6', selectionBackground: '#344e72' }, linkHandler: { activate() {} } });
+  const term = new Terminal({ disableStdin: meta.status !== 'connected' || !!meta.terminalInputLocked, ...terminalOptions, fontFamily: 'Consolas, Liberation Mono, monospace', allowProposedApi: false, theme: { background: '#080b0d', foreground: '#e7e8e9', cursor: '#8fffc6', selectionBackground: '#344e72' }, linkHandler: { activate() {} } });
   const addon = new FitAddon(); term.loadAddon(addon); term.open(pane);
   pane.addEventListener('mousedown', () => { const dom = document.getSelection(); if (selected?.kind === 'execution' || executionBody(dom?.anchorNode) || executionBody(dom?.focusNode)) { selected = null; dom.removeAllRanges(); renderSelection(); } }, true);
   pane.addEventListener('focusin', () => call('terminalFocus', true).catch(notice));
@@ -161,6 +163,7 @@ function ensureSession(meta) {
     if ((event.ctrlKey || event.metaKey) && ['+', '=', '-', '0'].includes(key)) { event.preventDefault(); resizeTerminalFont(key === '0' ? 0 : key === '-' ? -1 : 1); return false; }
     if ((key === 'v' && (event.metaKey || event.ctrlKey)) || (key === 'insert' && event.shiftKey)) { event.preventDefault(); if (!event.repeat) pasteClipboard(meta.sessionId).catch(notice); return false; }
     if (((key === 'c' && (event.metaKey || event.ctrlKey)) || (key === 'insert' && event.ctrlKey && !event.shiftKey)) && term.hasSelection()) { event.preventDefault(); call('copy', term.getSelection()).catch(notice); return false; }
+    if (key === 'c' && event.ctrlKey && sessions.get(meta.sessionId)?.meta.terminalInputLocked) { event.preventDefault(); call('takeControl', meta.sessionId).catch(notice); return false; }
     return true;
   });
   term.onData(data => { if (active === meta.sessionId) call('write', { id: active, data }).catch(notice); });
@@ -248,11 +251,14 @@ function renderSharing() {
   $('question').placeholder = delegateMode ? '이 서버에서 할 작업을 입력하세요…' : 'Ask about this session…';
   $('delegation-toggle').disabled = !delegationState.enabled && (!connected || !auth.activeAccountId || !models.length || pendingRequests.has(active));
   $('delegation-status').hidden = !delegateMode && !delegationState.reason;
-  const ended = { completed: '목표 완료', 'needs-input': '추가 입력 필요', stopped: '사용자가 중지함', 'result-unknown': '실행 결과가 불확실하여 중지' }[delegationState.reason] || delegationState.reason;
+  const ended = { completed: '목표 완료', 'manual-takeover': '직접 조작으로 전환', 'needs-input': '추가 입력 필요', stopped: '사용자가 중지함', 'result-unknown': '실행 결과가 불확실하여 중지' }[delegationState.reason] || delegationState.reason;
   $('delegation-status').textContent = delegationState.enabled ? `위임 진행 · ${delegationState.phase} · 목표: ${delegationState.goal.slice(0, 160)}` : delegationReady ? `${delegationState.reason === 'completed' ? '목표 완료 · ' : ''}위임 대기 · 기존 채팅창에 목표를 입력하고 Enter를 누르세요.` : `위임 종료 · ${ended}`;
   $('advice-toggle').disabled ||= delegationState.enabled;
   $('preview-toggle').disabled = delegationState.enabled;
-  $('terminal-paste').disabled = !connected;
+  const shared = sessions.get(active)?.meta;
+  $('terminal-take-control').hidden = !shared?.terminalInputLocked;
+  $('terminal-owner').textContent = shared?.sharedTerminal ? shared.terminalInputLocked ? 'AI 조작 중' : shared.terminalReady ? '함께 쓰는 터미널' : shared.terminalIntegration === 'unsupported' ? '직접 조작 · 셸 연동 미지원' : '직접 조작' : '';
+  $('terminal-paste').disabled = !connected || !!shared?.terminalInputLocked;
   $('terminal-clear').disabled = !sessions.has(active);
 }
 async function submitMessage() {
@@ -305,7 +311,7 @@ async function showExecution(command) {
   if (active === 'general') return notice('Connect and select an SSH session to review execution.');
   const e = await call('execution', { id: active, command });
   const body = modal('Review command execution', () => call('cancelExecution', e.id));
-  body.append(el('p', `Trusted SSH target: ${e.target.username}@${e.target.host}:${e.target.port}\nSession ${e.sessionId}\nGeneration ${e.generation}`), el('div', e.target.fingerprint, { class: 'fingerprint' }), el('pre', e.command), el('p', 'Separate SSH exec channel. Server default login environment. Does not inherit the terminal directory or environment. Current directory, shell and effective privileges are unknown.'), el('p', `Risks: ${e.policy.risks.join(', ') || 'Remote executables and startup configuration can have side effects.'}`, { class: 'danger' }));
+  body.append(el('p', `Trusted SSH target: ${e.target.username}@${e.target.host}:${e.target.port}\nSession ${e.sessionId}\nGeneration ${e.generation}`), el('div', e.target.fingerprint, { class: 'fingerprint' }), el('pre', e.command), el('p', e.context.channel === 'shared-terminal' ? '현재 화면의 SSH 터미널에서 실행합니다. 현재 경로와 환경을 이어 사용하며, 명령과 결과를 같은 화면에서 볼 수 있습니다. AI 실행 중에는 입력 충돌을 막고 직접 조작으로 조작권을 가져올 수 있습니다.' : 'Separate SSH exec channel. Server default login environment. Does not inherit the terminal directory or environment. Current directory, shell and effective privileges are unknown.'), el('p', `Risks: ${e.policy.risks.join(', ') || 'Remote executables and startup configuration can have side effects.'}`, { class: 'danger' }));
   body.append(el('p', '명령 이름에 따른 허용 목록 제한은 없습니다. 승인하면 표시된 명령을 그대로 한 번 실행합니다. 입력이 필요한 프로그램은 터미널에 넣어 사용하세요.'));
   if (!e.policy.allowed) body.append(el('p', '명령에 숨겨진 제어 문자가 있거나 길이가 올바르지 않아 실행할 수 없습니다. 명령을 다시 입력해 주세요.', { class: 'modal-error' }));
   const follow = field(body, '실행 결과를 AI에 보내고 다음 작업 제안 받기', 'execution-followup', 'checkbox'); follow.checked = !!auth.activeAccountId && !!models.length; follow.disabled = !auth.activeAccountId || !models.length;
@@ -412,6 +418,7 @@ window.keyshell.subscribe(safe(async ({ type, detail }) => {
     else { appendExecutionOutput(s, detail); acknowledge(); }
   } else if (type === 'execution') {
     const s = sessions.get(detail.sessionId); if (!s) return;
+    if (detail.context?.channel === 'shared-terminal') return;
     const node = executionNode(s, `${detail.id}-status`);
     node.textContent = `${detail.command}\nExecution: ${detail.status}${Number.isInteger(detail.exitCode) ? ` · exit ${detail.exitCode}` : ''}${detail.error ? ` · ${errorText(detail.error)}` : ''}`;
     if (detail.status === 'running') { const stop = button('Request remote TERM', async () => { await call('cancelExecution', detail.id); stop.disabled = true; }); node.append(stop); }
@@ -419,7 +426,7 @@ window.keyshell.subscribe(safe(async ({ type, detail }) => {
   else if (type === 'auth-error') { delegationReady = null; if (detail.code === 'E-AUTH-CANCELLED') return; loginPending = false; loginError = errorText(detail.code); $('cancel-login').hidden = true; renderSettingsAuth(); notice(detail.code); }
   else if (type === 'terminal-paste') { await presentPaste(detail.sessionId, detail.preview); }
   else if (type === 'clipboard-error') { notice(detail.code); }
-  else if (type === 'delegation') { delegationState = detail; renderSharing(); }
+  else if (type === 'delegation') { if (detail.reason === 'manual-takeover') delegationReady = null; delegationState = detail; renderSharing(); }
   else if (type === 'automation-notice') { message(detail.text, 'answer', detail.sessionId); }
   else if (type === 'advice') { adviceState = detail; renderSharing(); }
   else if (type === 'manual-question' || type === 'automatic-question' || type === 'result-question') {
@@ -441,6 +448,7 @@ for (const b of document.querySelectorAll('[data-new]')) b.onclick = () => newCo
 for (const b of document.querySelectorAll('[data-window]')) b.onclick = safe(() => call('window', b.dataset.window));
 $('search').oninput = renderProfiles;
 $('settings').onclick = settings; $('update').onclick = safe(() => updateDialog());
+$('terminal-take-control').onclick = safe(async () => { await call('takeControl', active); sessions.get(active)?.term.focus(); });
 $('terminal-paste').onclick = safe(() => pasteClipboard());
 $('terminal-clear').onclick = () => { sessions.get(active)?.term.clear(); sessions.get(active)?.term.focus(); };
 $('terminal-font-down').onclick = () => resizeTerminalFont(-1); $('terminal-font-up').onclick = () => resizeTerminalFont(1);

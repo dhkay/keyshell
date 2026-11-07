@@ -4,6 +4,7 @@ const { createHash, randomUUID } = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
 const fs = require('node:fs');
 const { Client, utils } = require('ssh2');
+const { SharedTerminal } = require('./shared-terminal.cjs');
 const { Store } = require('./store.cjs');
 const { LIMITS, fail, validateProfile, validateCredentials, inspectCommand } = require('./policy.cjs');
 const FINAL = new Set(['completed', 'failed', 'cancelled', 'invalidated', 'unknown', 'interrupted', 'blocked']);
@@ -47,14 +48,14 @@ function errorCode(e) {
   return ({ ECONNREFUSED: 'E-SSH-REFUSED', ENOTFOUND: 'E-SSH-DNS', ETIMEDOUT: 'E-SSH-TIMEOUT' })[e?.code] || (e?.level === 'client-timeout' ? 'E-SSH-TIMEOUT' : 'E-SSH-NETWORK');
 }
 class SSHService extends EventEmitter {
-  constructor({ userDataPath, store, clientFactory = () => new Client(), readyTimeout = 120000, shellTimeout = 15000, execOpenTimeout = 15000, keepaliveInterval = 15000, keepaliveCountMax = 3, maxActiveSessions = 16, maxSessionHistory = 64, maxActiveExecutions = 32, maxExecutionHistory = 128 } = {}) {
-    super(); this.store = store || new Store(userDataPath); this.clientFactory = clientFactory; this.readyTimeout = readyTimeout;
+  constructor({ userDataPath, store, sharedTerminal = false, clientFactory = () => new Client(), readyTimeout = 120000, shellTimeout = 15000, execOpenTimeout = 15000, keepaliveInterval = 15000, keepaliveCountMax = 3, maxActiveSessions = 16, maxSessionHistory = 64, maxActiveExecutions = 32, maxExecutionHistory = 128 } = {}) {
+    super(); this.sharedTerminal = sharedTerminal; this.store = store || new Store(userDataPath); this.clientFactory = clientFactory; this.readyTimeout = readyTimeout;
     for (const [name, value] of Object.entries({ shellTimeout, execOpenTimeout, keepaliveInterval, keepaliveCountMax, maxActiveSessions, maxSessionHistory, maxActiveExecutions, maxExecutionHistory })) {
       if (!Number.isSafeInteger(value) || value < 1) fail('E-SERVICE-OPTIONS'); this[name] = value;
     }
     this.sessions = new Map(); this.challenges = new Map(); this.tokens = new Map(); this.executions = new Map(); this.disposed = false; this.execTimers = new Map(); this.outputSources = new Set(); this.outputFlights = new Map(); this.outputBytes = 0; this.outputLimit = 65536; this.outputMessageLimit = 128; this.outputAcknowledged = false;
   }
-  _view(s) { return { sessionId: s.id, generation: s.generation, ...s.profile, status: s.status, executionBlocked: !!s.execBlocked, fingerprint: s.fingerprint || null, keyType: s.keyType || null, remoteAddress: s.client?._sock?.remoteAddress || s.remoteAddress || null, remotePort: s.client?._sock?.remotePort || s.remotePort || null, error: s.error || null }; }
+  _view(s) { return { sessionId: s.id, generation: s.generation, ...s.profile, status: s.status, executionBlocked: !!s.execBlocked, sharedTerminal: this.sharedTerminal, terminalReady: !!s.shared?.ready, terminalInputLocked: !!s.shared?.owner, terminalIntegration: s.shared?.unsupported ? 'unsupported' : s.shared?.initializing ? 'initializing' : s.shared?.owner ? 'ai' : s.shared?.ready ? 'ready' : 'manual', fingerprint: s.fingerprint || null, keyType: s.keyType || null, remoteAddress: s.client?._sock?.remoteAddress || s.remoteAddress || null, remotePort: s.client?._sock?.remotePort || s.remotePort || null, error: s.error || null }; }
   _state(s, status, error) { s.status = status; s.error = error; this.emit('session', this._view(s)); }
   async connect(input, supplied) {
     if (this.disposed) fail('E-SERVICE-DISPOSED');
@@ -84,7 +85,7 @@ class SSHService extends EventEmitter {
       };
       const rejectOnce = code => { if (!settled) { settled = true; clearAuth(); const e = new Error(code); e.code = code; e.sessionId = s.id; reject(e); } };
       s.finish = (status, code) => {
-        if (s.ended) return; s.ended = true; clearTimeout(shellTimer); clearAuth();
+        if (s.ended) return; s.ended = true; s.shared?.dispose(); clearTimeout(shellTimer); clearAuth();
         s.remoteAddress = client._sock?.remoteAddress || null; s.remotePort = client._sock?.remotePort || null;
         for (const [id, c] of this.challenges) if (c.session === s) { this.challenges.delete(id); c.verify(false); }
         this._invalidate(s);
@@ -102,10 +103,12 @@ class SSHService extends EventEmitter {
           clearTimeout(shellTimer);
           if (s.ended) { stream?.close(); return; }
           if (err) { s.finish?.('failed', 'E-SSH-SHELL'); client.destroy(); return; }
-          s.shell = stream; this._output(s, stream, 'terminal');
+          s.shell = stream;
+          if (this.sharedTerminal) s.shared = new SharedTerminal({ write: data => stream.write(data), changed: () => { if (!s.ended) this._state(s, s.status, s.error); }, output: (data, id, synthetic) => s.sharedOutput?.(data, id, synthetic), finished: (id, status, extra) => { const e = this.executions.get(id); if (e && !FINAL.has(e.status)) this._change(e, status, extra); } });
+          this._output(s, stream, 'terminal');
           stream.on('close', () => { s.finish?.('disconnected'); client.end(); });
           stream.on('error', () => { s.finish?.('failed', 'E-SSH-SHELL'); client.destroy(); });
-          this._state(s, 'connected'); if (!settled) { settled = true; resolve(this._view(s)); }
+          this._state(s, 'connected'); s.shared?.initialize(); if (!settled) { settled = true; resolve(this._view(s)); }
         });
       });
       const hostVerifier = (key, verify) => {
@@ -142,7 +145,8 @@ class SSHService extends EventEmitter {
   }
   _connected(id) { const s = this.sessions.get(id); if (!s || s.ended || s.status !== 'connected') fail('E-SSH-NOT-CONNECTED'); return s; }
   disconnect(id) { const s = this.sessions.get(id); if (!s) fail('E-SSH-SESSION'); if (!s.ended) { s.finish?.('disconnected'); } }
-  write(id, data) { const s = this._connected(id); if (typeof data !== 'string' || Buffer.byteLength(data) > LIMITS.input || data.includes('\0')) fail('E-TERM-INPUT'); return { accepted: s.shell.write(data), multiline: /[\r\n]/.test(data), controlCharacters: /[\x00-\x08\x0b-\x1f\x7f]/.test(data) }; }
+  write(id, data) { const s = this._connected(id); if (typeof data !== 'string' || Buffer.byteLength(data) > LIMITS.input || data.includes('\0')) fail('E-TERM-INPUT'); if (s.shared?.owner) fail('E-TERM-AI-BUSY'); s.shared?.manual(); return { accepted: s.shell.write(data), multiline: /[\r\n]/.test(data), controlCharacters: /[\x00-\x08\x0b-\x1f\x7f]/.test(data) }; }
+  takeControl(id) { const s = this._connected(id); s.shared?.takeControl(); return { requested: true }; }
   resize(id, cols, rows) { const s = this._connected(id); if (![cols, rows].every(n => Number.isInteger(n) && n >= 1 && n <= 1000)) fail('E-TERM-SIZE'); s.shell.setWindow(rows, cols, 0, 0); }
   // Production requires consumption ACKs. Core consumers can keep synchronous delivery.
   setOutputConsumer(enabled) { this.outputAcknowledged = enabled; }
@@ -172,7 +176,9 @@ class SSHService extends EventEmitter {
       if (!source) return;
       const filter = new OutputFilter(), item = { source, s, channel, executionId, kind, pending: '', closed: false };
       this.outputSources.add(item);
-      source.on('data', chunk => { source.pause(); const data = filter.push(chunk); this.emit('observed-output', { sessionId: s.id, generation: s.generation, channel, executionId: executionId || null, stream: kind, data, untrusted: true }); item.pending += data; this._drainOutput(); });
+      const output = (chunk, ownerId = executionId, synthetic = false) => { const data = filter.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)); if (!synthetic) this.emit('observed-output', { sessionId: s.id, generation: s.generation, channel: ownerId ? 'execution' : channel, executionId: ownerId || null, stream: kind, data, untrusted: true }); item.pending += data; this._drainOutput(); };
+      if (s.shared && channel === 'terminal' && kind === 'stdout') s.sharedOutput = output;
+      source.on('data', chunk => { source.pause(); if (s.shared && channel === 'terminal' && kind === 'stdout') { s.shared.push(chunk); this._drainOutput(); } else output(chunk); });
       source.on('end', () => { item.closed = true; this._drainOutput(); });
       source.on('close', () => { item.closed = true; this._drainOutput(); });
     };
@@ -189,12 +195,14 @@ class SSHService extends EventEmitter {
     this.outputSources.clear(); this.outputFlights.clear(); this.outputBytes = 0;
     return discardedBytes;
   }
-  prepareExecution(id, command) {
-    const s = this._connected(id), policy = inspectCommand(command); if (s.execBlocked) fail('E-EXEC-RECONNECT-REQUIRED');
+  prepareExecution(id, command, { shared = this.sharedTerminal } = {}) {
+    const s = this._connected(id), policy = inspectCommand(command);
+    if (shared && (!s.shared?.ready || s.shared.owner)) fail('E-TERM-NOT-READY');
+    if (shared) policy.limitations = ['Uses the current interactive terminal directory and environment.', 'PTY output combines stdout and stderr.', 'Execution waits for a confirmed shell prompt.']; if (s.execBlocked) fail('E-EXEC-RECONNECT-REQUIRED');
     // Editing/replacing a proposal invalidates the previous pending confirmation.
     for (const e of this.executions.values()) if (e.sessionId === id && e.status === 'pending') this._change(e, 'invalidated');
     if ([...this.executions.values()].filter(e => !FINAL.has(e.status)).length >= this.maxActiveExecutions) fail('E-EXEC-ACTIVE-LIMIT');
-    const execution = { id: randomUUID(), token: policy.allowed ? randomUUID() : null, sessionId: id, generation: s.generation, command, target: this._view(s), context: { channel: 'ssh-exec', environment: 'server-default-login', inheritsTerminal: false, cwd: null, shell: null, effectivePrivileges: null }, policy, status: policy.allowed ? 'pending' : 'blocked' };
+    const execution = { id: randomUUID(), token: policy.allowed ? randomUUID() : null, sessionId: id, generation: s.generation, command, target: this._view(s), context: { channel: shared ? 'shared-terminal' : 'ssh-exec', environment: shared ? 'current-interactive-shell' : 'server-default-login', inheritsTerminal: shared, cwd: null, shell: null, effectivePrivileges: null }, policy, status: policy.allowed ? 'pending' : 'blocked' };
     if (typeof command !== 'string' || Buffer.byteLength(command) > LIMITS.command) fail('E-EXEC-SIZE');
     if (execution.token) this.tokens.set(execution.token, execution.id);
     this.executions.set(execution.id, execution); this._prune(); this.emit('execution', structuredClone(execution)); return structuredClone(execution);
@@ -206,6 +214,12 @@ class SSHService extends EventEmitter {
     if (!e || e.status !== 'pending') fail('E-EXEC-STALE');
     const s = this._connected(e.sessionId); if (s.execBlocked) fail('E-EXEC-RECONNECT-REQUIRED');
     if (s.generation !== e.generation || !inspectCommand(e.command).allowed) { this._change(e, 'invalidated'); fail('E-EXEC-STALE'); }
+    if (e.context.channel === 'shared-terminal') {
+      if (!s.shared?.ready || s.shared.owner) { this._change(e, 'invalidated'); fail('E-TERM-NOT-READY'); }
+      this._change(e, 'running');
+      try { if (!s.shared.start(e.id, e.command)) { this._change(e, 'invalidated'); fail('E-TERM-NOT-READY'); } } catch (error) { if (!FINAL.has(e.status)) this._change(e, 'unknown', { error: 'E-EXEC-UNKNOWN' }); throw error; }
+      return { executionId: e.id, status: e.status };
+    }
     this._change(e, 'running'); // consume synchronously before opening the channel
     this.execTimers.set(e.id, setTimeout(() => { s.execBlocked = true; this._change(e, 'unknown', { error: 'E-EXEC-OPEN-TIMEOUT', remoteTerminationConfirmed: false }); for (const pending of this.executions.values()) if (pending.sessionId === s.id && pending.status === 'pending') this._change(pending, 'invalidated'); this._state(s, s.status, s.error); }, this.execOpenTimeout));
     try {
@@ -226,7 +240,7 @@ class SSHService extends EventEmitter {
   cancelExecution(id) {
     const e = this.executions.get(id); if (!e) fail('E-EXEC-ID');
     if (e.status === 'pending') this._change(e, 'cancelled');
-    else if (e.status === 'running') { this._change(e, 'cancel-requested', { remoteTerminationConfirmed: false }); try { e.stream?.signal('TERM'); } catch { this._change(e, 'unknown'); } }
+    else if (e.status === 'running') { this._change(e, 'cancel-requested', { remoteTerminationConfirmed: false }); try { if (e.context.channel === 'shared-terminal') this.sessions.get(e.sessionId)?.shared?.interrupt(); else e.stream?.signal('TERM'); } catch { this._change(e, 'unknown'); } }
     return structuredClone(this._executionView(e));
   }
   _invalidate(s) { for (const e of this.executions.values()) if (e.sessionId === s.id) { if (e.status === 'pending') this._change(e, 'invalidated'); else if (['running', 'cancel-requested'].includes(e.status)) this._change(e, 'unknown', { error: 'E-EXEC-UNKNOWN' }); } }

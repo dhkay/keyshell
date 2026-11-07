@@ -4,7 +4,7 @@
 
 <a id="한국어"></a>
 
-Windows와 macOS용 SSH 데스크톱 앱입니다. 터미널과 AI 대화를 나누고, 선택한 출력 또는 세션별 자동 조언에 동의한 새 출력만 ChatGPT에 공유합니다. 제안된 명령은 전체 내용과 접속 대상을 확인한 뒤 한 번 실행합니다.
+Windows·macOS·Linux용 SSH 데스크톱 앱입니다. 터미널과 AI 대화를 나누고, 선택한 출력 또는 세션별 자동 조언에 동의한 새 출력만 ChatGPT에 공유합니다. 제안된 명령은 전체 내용과 접속 대상을 확인한 뒤 한 번 실행합니다.
 
 현재 개발 중입니다. Windows x64에서 실제 SSH·화면 통합 테스트를 통과했습니다. 실제 사용자 ChatGPT 인증, macOS·arm64 실행과 서명·공증 검증은 남아 있습니다.
 
@@ -44,9 +44,19 @@ SSH 연결과 ChatGPT 로그인 후 **위임 OFF**를 눌러 켜고, 기존 채�
 
 - AI는 OS와 기존 구성을 먼저 확인하고, 설치·설정 변경 및 검증을 순차적으로 요청합니다. 원격 명령은 현재 SSH 계정 권한으로 실행합니다. 비밀번호 입력이 필요한 설치는 수동 작업으로 전환합니다.
 - 위임의 단계 수·전체 작업 시간·명령 실행 시간에는 인위적인 제한이 없습니다. 전체 계획과 누적 진행 상황을 유지하며 결과에 따라 다음 단계를 결정합니다. 완료·추가 입력 필요·불확실한 종료·AI 오류 시 자동 재시도 없이 멈춥니다.
-- **위임 ON · 중지**, 응답 취소, 탭·계정·모델·연결·대화 변경, 앱 재시작으로 추가 실행을 중단합니다. 실행 중 명령에는 TERM을 요청하지만 종료나 변경 취소를 보장하지 않으며, 이미 적용한 변경을 자동 복구하지 않습니다.
+- **위임 ON · 중지**, 응답 취소, 탭·계정·모델·연결·대화 변경, 앱 재시작으로 추가 실행을 중단합니다. 실행 중인 공유 터미널에는 Ctrl+C로 중단을 요청하지만 종료나 변경 취소를 보장하지 않으며, 이미 적용한 변경을 자동 복구하지 않습니다.
 - 삭제·대화형 명령·디스크 관리·재부팅·저장소 추가 등 탐지한 추가 확인 작업은 일반 검토로 넘깁니다. 임의 셸의 실제 효과와 목표 준수 여부를 완전히 판별하는 샌드박스는 아니므로, 위임은 해당 SSH 계정 권한으로 서버를 변경할 수 있는 기능입니다.
 - 서버 출력은 비신뢰 데이터로 처리하고 로컬 가림을 적용합니다. 가림과 위험 탐지는 완벽하지 않습니다. 외부 AI 서비스의 계정 권한·사용량 한도는 계속 적용됩니다.
+
+## 사람과 AI의 공유 터미널
+
+승인 실행과 위임 명령은 사람이 쓰는 **같은 SSH 터미널**에 `[AI]`로 표시하고, 결과와 종료 코드도 같은 화면에 출력합니다. 사람이 이동한 폴더·설정한 환경 변수를 AI가 이어 쓰고, AI가 바꾼 경로·환경도 다음 직접 입력에 유지됩니다. 별도 서버 에이전트 설치는 필요하지 않습니다.
+
+- 셸이 새 프롬프트를 반환했는지 확인한 뒤 AI 명령을 보냅니다. 입력 중인 줄이나 실행 중인 프로그램에 명령을 끼워 넣지 않습니다. 출력을 잠시 멈춘 것을 완료로 간주하지 않습니다.
+- AI 실행 중에는 일반 입력·붙여넣기 충돌을 막습니다. **직접 조작** 또는 선택 영역이 없는 Ctrl+C로 AI를 멈추고 조작권을 가져올 수 있습니다. 실행이 끝났다고 확인하지 못하면 결과는 불확실로 기록합니다.
+- AI가 다음 단계를 계획 중일 때 사람이 터미널에 입력하거나 붙여넣으면 위임을 중지합니다. 사용자가 다시 시작하지 않으면 AI가 자동으로 조작권을 되가져가지 않습니다.
+- Bash·Zsh의 프롬프트 훅을 현재 셸 프로세스에 연결해 종료를 확인합니다. 서버 시작 파일을 수정하지 않습니다. 셸 연동이 확인되지 않거나 사용자가 훅을 변경하면 AI 실행을 허용하지 않고 직접 터미널 조작을 유지합니다.
+- 전체 화면 프로그램·암호 입력처럼 직접 상호작용이 필요한 경우 사람이 조작합니다. 이 기능은 터미널 출력·상태 공유이며 데스크톱 화면 캡처 공유는 아닙니다.
 
 ## 터미널 기본 조작
 
@@ -90,7 +100,7 @@ npm run package:dev
 
 - 전송 전 확인 ON에서는 질문·첨부·이전 대화가 포함된 전체 요청을 확인할 수 있습니다. OFF에서는 전송 동작을, 자동 조언에서는 별도의 세션별 동의를 공유 승인으로 사용합니다. 가림은 로컬에서 하며 모든 비밀을 탐지한다고 보장하지 않습니다.
 - 일반 대화에는 SSH 실행 도구나 인증정보 접근 권한을 제공하지 않습니다. 위임 모드에서만 목표별 동의 후 앱이 AI의 구조화된 명령 요청을 실행합니다. 터미널 출력과 AI 답변은 비신뢰 데이터로 처리합니다.
-- 앱의 명령 실행은 별도 SSH exec 채널을 사용하며, 대화형 셸의 디렉터리·환경을 상속하지 않습니다. 명령어 허용 목록은 사용하지 않습니다. 사용자가 전체 명령과 대상을 확인해 한 번 승인하거나 위임 목표를 승인하면 실행하며, 숨겨진 제어 문자와 잘못된 입력만 거부합니다. 삭제·권한 변경·외부 전송·복합 셸 구문은 주의 항목으로 표시합니다.
+- 앱의 승인·위임 명령은 현재 화면의 SSH PTY를 사용하며, 사용자의 현재 경로·환경을 이어 사용합니다. 별도 실행 결과 패널로 분리하지 않습니다. 명령어 허용 목록은 사용하지 않습니다. 사용자가 전체 명령과 대상을 확인해 한 번 승인하거나 위임 목표를 승인하면 실행하며, 숨겨진 제어 문자와 잘못된 입력만 거부합니다. 삭제·권한 변경·외부 전송·복합 셸 구문은 주의 항목으로 표시합니다.
 - 실패·연결 단절·앱 재시작으로 질문이나 명령을 자동 재전송하지 않습니다. 결과를 알 수 없을 때 성공으로 표시하지 않습니다.
 - 대화·터미널 출력·실행 기록은 메모리에만 보관합니다. 외부 제공자에게 이미 전송된 내용의 보관·삭제 범위는 제공자 정책을 따릅니다.
 
@@ -137,6 +147,7 @@ The controls currently use Korean labels:
 | **AI 터미널 공유** | AI terminal sharing and automatic advice |
 | **위임** | Delegate a server task |
 | **터미널에 넣기** | Insert the command into the terminal |
+| **직접 조작** | Stop AI control and return terminal input to you |
 
 - **Review before sending** defaults to OFF. Enter sends your question and explicitly attached output; Shift+Enter inserts a newline. Enter used to finish Korean IME composition does not send the message. Turn review ON to inspect, edit, or cancel the complete request before sending.
 - Scroll up to keep your reading position while answers arrive. Press Enter in an empty chat input to jump to the bottom and follow new content.
@@ -151,7 +162,7 @@ Use **Review & run**, inspect the complete command and SSH target, then choose *
 
 Select **실행 결과를 AI에 보내고 다음 작업 제안 받기** (“Send the execution result to AI and suggest next steps”) to analyze the final command status, exit code, and recent output up to 16KiB. This works without automatic terminal sharing, including for commands with no output or with failed or uncertain results. Suggested follow-up commands require their own approval in normal mode. Cancelled or changed contexts do not continue sharing the result.
 
-Commands run through separate noninteractive SSH exec channels. They do not inherit the interactive terminal's current directory or environment, and a previous `cd` or environment change does not persist into the next command. For interactive installers and editors, use **터미널에 넣기** and work in the terminal directly. Inserting a single-line command does not press Enter.
+Approved commands run in the same interactive SSH PTY you use. Your current directory and environment are shared: a `cd` or `export` from either you or the AI remains available to subsequent commands. Command output, including merged stdout and stderr, is displayed in that terminal. For interactive installers and editors, use **터미널에 넣기** and work in the terminal directly. Inserting a single-line command does not press Enter.
 
 ### Delegate an installation or configuration goal
 
@@ -163,10 +174,20 @@ Review the SSH target, fingerprint, the goal you sent from chat, and authority t
 
 - There is no arbitrary step-count, overall task-duration, or command-runtime cutoff. A task can continue beyond the former 30-step, 30-minute, and ten-minute command limits until completion or an explicit stopping condition.
 - Delegated commands run with the connected SSH account's permissions and can install software or change server configuration without individual command approvals within the consented goal.
-- **위임 ON · 중지** stops further steps and requests TERM for a command already running. Cancellation, tab/account/model/connection/conversation changes, and app restarts also stop further execution. TERM does not guarantee remote termination; changes already applied are not automatically rolled back.
+- **위임 ON · 중지** stops further steps and requests interruption with Ctrl+C in the shared terminal. Cancellation, tab/account/model/connection/conversation changes, and app restarts also stop further execution. Interruption does not guarantee remote termination; changes already applied are not automatically rolled back.
 - Completion, missing required information, AI errors, and uncertain execution results end delegation without automatic replay. A normal observed execution result is required before the app accepts a completion response. Routine authorized steps are planned automatically; credentials, interactive input, or further authority may require user involvement.
 - Detected deletion, interactive commands, disk management, reboot, repository addition, and similar operations requiring further confirmation stop automatic execution for manual review. This is not a sandbox that can fully determine the effects or goal alignment of arbitrary shell commands. Output and AI responses remain untrusted data, and masking and risk detection are incomplete.
 - External AI service access, network availability, and account usage limits still apply.
+
+### One terminal for you and the AI
+
+Reviewed and delegated commands use your existing SSH PTY. They are labelled `[AI]`; output and exit status appear in the same terminal, without a separate execution output panel. Directory and environment changes persist for both manual and AI commands.
+
+- A confirmed shell prompt is required before AI input. Partial input and running foreground programs block AI execution; idle output is not proof of completion.
+- During AI execution, ordinary input and paste are blocked to avoid collisions. **직접 조작** (“Take control”) or Ctrl+C without a selection stops further AI steps and returns input control. An unconfirmed outcome is recorded as unknown.
+- Typing or pasting while the AI is planning stops delegation. It does not automatically take control back afterward.
+- Completion detection uses Bash/Zsh prompt hooks in the current shell process and does not modify remote startup files or install a server agent. When prompt integration cannot be confirmed, manual SSH remains available and AI execution is blocked.
+- The PTY merges stdout and stderr. Interactive programs and password entry require human control. Sharing the terminal does not capture desktop screenshots.
 
 ### Terminal basics
 

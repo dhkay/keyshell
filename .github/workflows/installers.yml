@@ -56,7 +56,7 @@ jobs:
         run: npx electron --version
       - name: 설정 및 AI 공유 모드 화면 회귀 검증
         if: runner.os != 'Linux'
-        run: node --test --test-name-pattern="settings reflect|AI sharing modes|terminal clipboard|delegation and chat scroll" tests/desktop.test.cjs
+        run: node --test --test-name-pattern="settings reflect|AI sharing modes|terminal clipboard|delegation and chat scroll|shared terminal" tests/desktop.test.cjs
       - name: 개발용 단일 설치파일 생성
         shell: bash
         env:
