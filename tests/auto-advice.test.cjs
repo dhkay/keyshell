@@ -30,17 +30,18 @@ test('automatic advice requires a fresh consent binding and excludes output befo
   assert.match(payload, /password=\[REDACTED\]/); assert.equal(f.calls[0].tools, undefined);
   assert.equal(f.ssh.executions.size, 0);
 });
-test('automatic advice bounds UTF8 output, rate and turn count, and never repeats old output', async t => {
+test('automatic advice bounds output and rate but continues beyond ten turns without repeating old output', async t => {
   const f = fixture(t); f.enable();
   f.output('가'.repeat(10000)); assert.ok(Buffer.byteLength(f.advice.grant.buffer) <= AUTO_LIMITS.bytes);
   await f.advice.flush(); assert.equal(f.calls.length, 1);
   await f.advice.flush(); assert.equal(f.calls.length, 1);
   f.output('new-only'); await f.advice.flush(); assert.equal(f.calls.length, 1);
-  for (let i = 1; i < AUTO_LIMITS.requests; i++) {
+  for (let i = 1; i < 15; i++) {
     f.advance(AUTO_LIMITS.intervalMs); f.output('new turn ' + i); await f.advice.flush();
   }
-  assert.equal(f.calls.length, AUTO_LIMITS.requests); assert.equal(f.advice.state().enabled, false); assert.equal(f.advice.state().reason, 'limit-reached');
-  f.output('after limit'); await f.advice.flush(); assert.equal(f.calls.length, AUTO_LIMITS.requests);
+  assert.equal(f.calls.length, 15); assert.equal(f.advice.state().enabled, true); assert.equal(f.advice.state().sent, 15);
+  assert.ok(f.calls.every(p => Buffer.byteLength(JSON.stringify(p)) < 80000));
+  f.advice.stop(); f.output('after stop'); await f.advice.flush(); assert.equal(f.calls.length, 15);
 });
 test('automatic sharing stops on generation, account, model and active-tab changes', async t => {
   for (const change of ['generation', 'account', 'model', 'tab']) {
@@ -126,4 +127,18 @@ test('output queued for renderer before consent never becomes automatically shar
   await advice.flush(); assert.equal(f.calls.length, 0); assert.equal(advice.grant.buffer, '');
   source.write('AFTER_CONSENT fresh status\n'); await advice.flush(); assert.equal(f.calls.length, 1);
   assert.ok(!JSON.stringify(f.calls).includes('BEFORE_CONSENT_BACKLOG'));
+});
+
+test('unlimited advice trims older context while preserving recent complete conversation turns', async t => {
+  const f = fixture(t); f.enable();
+  f.ai.sessions.get('first').history = [
+    { role: 'user', content: 'OLD_CONTEXT_MARKER_' + 'a'.repeat(50000) },
+    { role: 'assistant', content: 'b'.repeat(50000) },
+    { role: 'user', content: 'RECENT_USER_QUESTION' },
+    { role: 'assistant', content: 'RECENT_REPLY' }
+  ];
+  let question; f.advice.on('question', q => { question = q; }); f.output('new server state'); await f.advice.flush();
+  assert.equal(question.historyTrimmed, true); const payload = JSON.stringify(f.calls[0]);
+  assert.ok(!payload.includes('OLD_CONTEXT_MARKER')); assert.ok(payload.includes('RECENT_USER_QUESTION')); assert.ok(payload.includes('RECENT_REPLY'));
+  assert.ok(Buffer.byteLength(payload) < 80000); assert.equal(f.advice.state().enabled, true);
 });

@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, protocol, net, ipcMain, dialog, shell, safeStorage, clipboard } = require('electron');
+const { app, BrowserWindow, protocol, net, ipcMain, dialog, shell, safeStorage, clipboard, Menu } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { SSHService } = require('./ssh-service.cjs');
@@ -42,7 +42,7 @@ else app.whenReady().then(async () => {
     quitting = true; cleanup(); return true;
   };
   const updates = new UpdateService({ app, updater: require('electron-updater').autoUpdater, confirmClose });
-  const removeIPC = installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, app, clipboard });
+  const removeIPC = installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, app, clipboard, Menu });
   let hasRendererDocument = false;
   window.webContents.on('did-finish-load', () => { hasRendererDocument = true; });
   window.webContents.on('did-start-navigation', (_event, _url, inPlace, mainFrame) => { if (mainFrame && !inPlace && hasRendererDocument) { removeIPC.rendererLost('navigation'); hasRendererDocument = false; } });

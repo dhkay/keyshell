@@ -313,3 +313,50 @@ test('AI sharing modes: Enter sends once, IME and Shift+Enter do not send, auto 
     await new Promise(resolve => server.close(resolve)); fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('terminal clipboard and reviewed commands: real OS paste shortcuts, right click and PHP approval work', { timeout: 120000 }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'keyshell-paste-review-')), clients = new Set(), commands = [], inputs = [];
+  const key = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs1', format: 'pem' }); let app;
+  const server = new Server({ hostKeys: [key] }, client => {
+    clients.add(client); client.on('close', () => clients.delete(client)); client.on('error', () => {});
+    client.on('authentication', ctx => ctx.method === 'password' ? ctx.accept() : ctx.reject());
+    client.on('ready', () => client.on('session', accept => {
+      const session = accept(); session.on('pty', accept => accept()); session.on('window-change', accept => accept?.());
+      session.on('shell', accept => { const stream = accept(); stream.on('error', () => {}); stream.write('READY clipboard test\r\n'); stream.on('data', b => { inputs.push(b.toString()); stream.write(b); }); });
+      session.on('exec', (accept, _reject, info) => { commands.push(info.command); const stream = accept(); stream.write('PHP 8.5.0 (test server)\n'); stream.exit(0); stream.end(); });
+    }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const waitInput = async expected => { for (let i = 0; i < 100; i++) { if (inputs.join('') === expected) return; await new Promise(resolve => setTimeout(resolve, 20)); } assert.equal(inputs.join(''), expected); };
+  try {
+    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1' } });
+    const page = await app.firstWindow(), errors = []; page.on('pageerror', e => errors.push(e.message));
+    await page.locator('#auth-state').filter({ hasText: 'DEVELOPMENT FIXTURE' }).waitFor();
+    await app.evaluate((_electron, modulePath) => { const { AIService } = process.mainModule.require(modulePath), preview = AIService.prototype.preview; AIService.prototype.preview = function(...args) { const original = this.fetch; if (!this.__phpTest) { this.__phpTest = true; this.fetch = async (url, options) => url.endsWith('/responses') ? { ok: true, body: (async function* () { yield Buffer.from('data: {"type":"response.output_text.delta","delta":"```sh\\nphp-fpm8.5 -v\\n```"}\n\ndata: {"type":"response.completed"}\n\n'); })() } : original(url, options); } return preview.apply(this, args); }; }, require.resolve('../src/main/ai-service.cjs'));
+    await page.locator('[data-new]').first().click(); await page.getByLabel('Connection name', { exact: true }).fill('Clipboard SSH'); await page.getByLabel('Host', { exact: true }).fill('127.0.0.1'); await page.getByLabel('Port', { exact: true }).fill(String(server.address().port)); await page.getByLabel('Username', { exact: true }).fill('tester'); await page.getByLabel('Password', { exact: true }).fill('test-only'); await page.getByRole('button', { name: 'Connect', exact: true }).click(); await page.getByRole('button', { name: 'Trust & connect' }).click(); await page.locator('#connection-state').filter({ hasText: /^connected$/ }).waitFor();
+    const terminal = page.locator('.terminal-pane:not([hidden]) textarea');
+    await page.waitForTimeout(150);
+    await app.evaluate(({ clipboard }) => clipboard.writeText('before selection'));
+    const screen = await page.locator('.terminal-pane:not([hidden]) .xterm-screen').boundingBox();
+    await page.mouse.move(screen.x + 2, screen.y + 7); await page.mouse.down(); await page.mouse.move(screen.x + 110, screen.y + 7); await page.mouse.up();
+    await page.waitForTimeout(100); assert.match(await app.evaluate(({ clipboard }) => clipboard.readText()), /READY/);
+    await terminal.focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+c' : 'Control+c'); assert.equal(inputs.length, 0);
+    let expected = '';
+    for (const [shortcut, text] of [[process.platform === 'darwin' ? 'Meta+v' : 'Control+v', 'php -v'], ['Control+Shift+v', ' ctrl-shift'], ['Shift+Insert', ' shift-insert']]) {
+      if (process.platform === 'darwin' && shortcut === 'Shift+Insert') continue;
+      await app.evaluate(({ clipboard }, value) => clipboard.writeText(value), text); await terminal.focus(); await page.keyboard.press(shortcut); expected += text; await waitInput(expected);
+    }
+    await app.evaluate(({ clipboard }) => clipboard.writeText(' right-click')); await page.locator('.terminal-pane:not([hidden]) .xterm-screen').click({ button: 'right' }); expected += ' right-click'; await waitInput(expected);
+    await app.evaluate(({ clipboard }) => clipboard.writeText(' paste-button')); await page.locator('#terminal-paste').click(); expected += ' paste-button'; await waitInput(expected);
+    assert.ok(!inputs.join('').includes('\x16')); assert.ok(!inputs.join('').includes('\r')); assert.ok(!inputs.join('').includes('\n')); assert.deepEqual(commands, []);
+    await app.evaluate(({ clipboard }) => clipboard.writeText('echo first\necho second\n')); await terminal.focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+v' : 'Control+v'); await page.getByRole('heading', { name: 'Confirm terminal paste', exact: true }).waitFor(); assert.equal(inputs.join(''), expected); await page.getByRole('button', { name: 'Cancel', exact: true }).click(); assert.equal(inputs.join(''), expected);
+    await page.getByLabel('Ask about this session').fill('PHP 버전을 확인해줘'); await page.getByLabel('Ask about this session').press('Enter'); await page.getByRole('button', { name: 'Review & run', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Review & run', exact: true }).click(); const approve = page.getByRole('button', { name: 'Approve & run once', exact: true }); assert.equal(await approve.isEnabled(), true); assert.ok(!(await page.locator('#modal-body').textContent()).includes('Execution blocked')); await approve.click();
+    await page.waitForFunction(() => /PHP 8.5.0/.test(document.getElementById('executions').textContent) && /completed/.test(document.getElementById('executions').textContent)); assert.deepEqual(commands, ['php-fpm8.5 -v']);
+    await page.getByRole('button', { name: '터미널에 넣기', exact: true }).click(); expected += 'php-fpm8.5 -v'; await waitInput(expected); assert.deepEqual(commands, ['php-fpm8.5 -v']);
+    await page.locator('#terminal-font-up').click(); await page.locator('#settings').click(); assert.equal(await page.getByLabel('글자 크기 (8–32px)', { exact: true }).inputValue(), '14');
+    await page.getByLabel('스크롤 기록 줄 수 (1,000–50,000)', { exact: true }).fill('5000'); await page.getByRole('button', { name: '터미널 설정 적용', exact: true }).click(); await page.getByRole('button', { name: 'Done', exact: true }).click();
+    await page.locator('#terminal-clear').click(); assert.deepEqual(commands, ['php-fpm8.5 -v']);
+    await page.screenshot({ path: path.resolve('docs/verification/desktop/php-command-paste.png') }); assert.deepEqual(errors, []);
+  } finally { for (const client of clients) { client.end(); client._sock?.destroy(); } if (app) { await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); }).catch(() => {}); await app.close().catch(() => {}); } await new Promise(resolve => server.close(resolve)); fs.rmSync(directory, { recursive: true, force: true }); }
+});

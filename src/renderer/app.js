@@ -7,11 +7,22 @@ let connectionAttempt = null;
 let loginPending = false, loginError = '';
 let previewEnabled = false, adviceState = { enabled: false }, composing = false;
 const directRequests = new Map();
+let terminalOptions = { fontSize: 13, scrollback: 3000 };
+try { const stored = JSON.parse(localStorage.getItem('keyshell-terminal-options') || 'null'); if (stored && Number.isInteger(stored.fontSize) && stored.fontSize >= 8 && stored.fontSize <= 32 && Number.isInteger(stored.scrollback) && stored.scrollback >= 1000 && stored.scrollback <= 50000) terminalOptions = { fontSize: stored.fontSize, scrollback: stored.scrollback }; } catch {}
+function applyTerminalOptions(next) {
+  if (!Number.isInteger(next.fontSize) || next.fontSize < 8 || next.fontSize > 32 || !Number.isInteger(next.scrollback) || next.scrollback < 1000 || next.scrollback > 50000) return notice('글자 크기와 스크롤 기록 범위를 확인해 주세요.');
+  terminalOptions = next; for (const s of sessions.values()) { s.term.options.fontSize = next.fontSize; s.term.options.scrollback = next.scrollback; }
+  requestAnimationFrame(fit);
+  try { localStorage.setItem('keyshell-terminal-options', JSON.stringify(next)); } catch { notice('현재 실행에는 적용했지만 화면 설정을 저장하지 못했습니다.'); }
+}
+function resizeTerminalFont(delta) { applyTerminalOptions({ ...terminalOptions, fontSize: Math.min(32, Math.max(8, delta === 0 ? 13 : terminalOptions.fontSize + delta)) }); }
 let active = 'general', profiles = [], auth = {}, attachment = null, selected = null, models = [], modalCancel = null, dialogEpoch = 0;
 function el(tag, text, attrs = {}) { const node = document.createElement(tag); if (text !== null && text !== undefined) node.textContent = text; for (const [k, v] of Object.entries(attrs)) { if (k === 'class') node.className = v; else node.setAttribute(k, v); } return node; }
 const icon = name => el('img', null, { src: `assets/${name}`, alt: '', class: 'design-icon' });
 function button(text, action, cls = '') { const b = el('button', text, { type: 'button', class: cls }); b.addEventListener('click', safe(action)); return b; }
 const errorText = code => ({
+  'E-CLIPBOARD-READ': '클립보드의 텍스트를 읽지 못했습니다. 내용을 다시 복사한 뒤 붙여넣어 주세요.',
+  'E-CLIPBOARD-WRITE': '클립보드에 복사하지 못했습니다. 다시 선택해 복사해 주세요.',
   'E-AI-BUSY': 'AI 응답이 진행 중입니다. 완료를 기다리거나 응답을 취소한 뒤 다시 보내세요.',
   'E-AI-QUESTION': '질문을 입력해 주세요. 너무 긴 질문은 나누어 보내세요.',
   'E-SHARE-SIZE': '전송할 대화나 첨부가 너무 큽니다. 첨부를 줄이거나 새 대화를 시작해 주세요.',
@@ -132,21 +143,38 @@ async function closeSession(id) {
 function ensureSession(meta) {
   if (sessions.has(meta.sessionId)) { sessions.get(meta.sessionId).meta = meta; sessions.get(meta.sessionId).term.options.disableStdin = meta.status !== 'connected'; return sessions.get(meta.sessionId); }
   const pane = el('div', null, { class: 'terminal-pane', 'data-session': meta.sessionId }); pane.hidden = true; $('terminals').append(pane);
-  const term = new Terminal({ disableStdin: meta.status !== 'connected', fontSize: 13, fontFamily: 'Consolas, Liberation Mono, monospace', scrollback: 3000, allowProposedApi: false, theme: { background: '#080b0d', foreground: '#e7e8e9', cursor: '#8fffc6', selectionBackground: '#344e72' }, linkHandler: { activate() {} } });
+  const term = new Terminal({ disableStdin: meta.status !== 'connected', ...terminalOptions, fontFamily: 'Consolas, Liberation Mono, monospace', allowProposedApi: false, theme: { background: '#080b0d', foreground: '#e7e8e9', cursor: '#8fffc6', selectionBackground: '#344e72' }, linkHandler: { activate() {} } });
   const addon = new FitAddon(); term.loadAddon(addon); term.open(pane);
   pane.addEventListener('mousedown', () => { const dom = document.getSelection(); if (selected?.kind === 'execution' || executionBody(dom?.anchorNode) || executionBody(dom?.focusNode)) { selected = null; dom.removeAllRanges(); renderSelection(); } }, true);
   pane.addEventListener('focusin', () => call('terminalFocus', true).catch(notice));
   pane.addEventListener('focusout', event => { if (!pane.contains(event.relatedTarget)) call('terminalFocus', false).catch(notice); });
   // No WebLinks addon and no OSC clipboard integration. Paste is intercepted before xterm writes.
-  pane.addEventListener('paste', safe(async event => { event.preventDefault(); event.stopImmediatePropagation(); const data = event.clipboardData?.getData('text/plain') || ''; if (!data || active !== meta.sessionId) return; const p = await call('pastePreview', { id: active, data }); if (!p.confirmationRequired) return call('paste', p.token); const body = modal('Confirm terminal paste', () => call('invalidate')); body.append(el('p', 'This paste contains line breaks or control characters. Review the complete content before sending it to the manual SSH shell.'), el('pre', p.data.replace(/\r/g, '␍').replace(/\t/g, '⇥').replace(/[\x00-\x09\x0b-\x1f\x7f]/g, ch => `\\x${ch.charCodeAt(0).toString(16).padStart(2, '0')}`))); actions(body, [button('Cancel', clearModal), button('Paste into SSH', async () => { await call('paste', p.token); modalCancel = null; clearModal(); term.focus(); }, 'mint')]); }), true);
-  term.attachCustomKeyEventHandler(event => { if (event.type === 'keydown' && event.key.toLowerCase() === 'c' && (event.metaKey || (event.ctrlKey && event.shiftKey)) && term.hasSelection()) { event.preventDefault(); call('copy', term.getSelection()).catch(notice); return false; } return true; });
+  pane.addEventListener('paste', safe(async event => { event.preventDefault(); event.stopImmediatePropagation(); const data = event.clipboardData?.getData('text/plain') || ''; if (!data || active !== meta.sessionId) return; await presentPaste(meta.sessionId, await call('pastePreview', { id: meta.sessionId, data })); }), true);
+  pane.addEventListener('contextmenu', safe(event => { event.preventDefault(); if (active !== meta.sessionId) return; if (event.shiftKey) return call('terminalContextMenu', { id: meta.sessionId, selection: term.getSelection() }); return pasteClipboard(meta.sessionId); }));
+  term.attachCustomKeyEventHandler(event => {
+    if (event.type !== 'keydown') return true;
+    const key = event.key.toLowerCase();
+    if ((event.ctrlKey || event.metaKey) && ['+', '=', '-', '0'].includes(key)) { event.preventDefault(); resizeTerminalFont(key === '0' ? 0 : key === '-' ? -1 : 1); return false; }
+    if ((key === 'v' && (event.metaKey || event.ctrlKey)) || (key === 'insert' && event.shiftKey)) { event.preventDefault(); if (!event.repeat) pasteClipboard(meta.sessionId).catch(notice); return false; }
+    if (((key === 'c' && (event.metaKey || event.ctrlKey)) || (key === 'insert' && event.ctrlKey && !event.shiftKey)) && term.hasSelection()) { event.preventDefault(); call('copy', term.getSelection()).catch(notice); return false; }
+    return true;
+  });
   term.onData(data => { if (active === meta.sessionId) call('write', { id: active, data }).catch(notice); });
   const terminalSelectionChanged = () => { if (active !== meta.sessionId) return; const text = term.getSelection(); if (!text && selected?.kind === 'execution') return; selected = text ? { kind: 'terminal', text, id: active, generation: meta.generation, source: `${meta.username}@${meta.host}:${meta.port}` } : null; if (text && executionBody(document.getSelection()?.anchorNode)) document.getSelection().removeAllRanges(); renderSelection(); };
   term.onSelectionChange(terminalSelectionChanged);
   // xterm can omit its change event when a cleared range is selected again at the same coordinates.
-  pane.addEventListener('mouseup', () => queueMicrotask(terminalSelectionChanged));
+  pane.addEventListener('mouseup', event => { if (event.button !== 0) return; queueMicrotask(() => { terminalSelectionChanged(); const text = term.getSelection(); if (text && active === meta.sessionId) call('copy', text).catch(notice); }); });
   const s = { meta, pane, term, addon, since: Date.now(), executionNodes: new Map() }; sessions.set(meta.sessionId, s); return s;
 }
+async function presentPaste(id, preview) {
+  const s = sessions.get(id); if (!s || active !== id || s.meta.generation !== preview.generation) { if (preview.empty) notice('클립보드에 붙여넣을 텍스트가 없습니다.'); return; }
+  if (!preview.confirmationRequired) { discardSelection(); await call('paste', preview.token); s.term.focus(); return; }
+  const body = modal('Confirm terminal paste', () => call('invalidate'));
+  body.append(el('p', '여러 줄이나 제어 문자가 포함되어 있습니다. 아래 내용을 확인하세요. 줄바꿈은 터미널에서 명령을 실행할 수 있습니다.'), el('pre', preview.data.replace(/\r/g, '␍').replace(/\t/g, '⇥').replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f\u2028\u2029]/g, ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`)));
+  actions(body, [button('Cancel', clearModal), button('Paste into SSH', async () => { discardSelection(); await call('paste', preview.token); modalCancel = null; clearModal(); if (active === id) s.term.focus(); }, 'mint')]);
+}
+async function pasteClipboard(id = active) { return presentPaste(id, await call('clipboardPastePreview', id)); }
+async function insertCommand(command, id = active) { if (!sessions.has(id) || active !== id) return notice('명령을 넣을 SSH 세션을 먼저 선택해 주세요.'); return presentPaste(id, await call('pastePreview', { id, data: command })); }
 function fit() { const s = sessions.get(active); if (!s || s.pane.hidden) return; requestAnimationFrame(() => { try { s.addon.fit(); if (s.meta.status === 'connected') call('resize', { id: active, cols: s.term.cols, rows: s.term.rows }).catch(() => {}); } catch {} }); }
 new ResizeObserver(fit).observe($('terminals'));
 function executionBody(node) { return (node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement)?.closest('[data-execution-output]') || null; }
@@ -199,17 +227,19 @@ async function previewMessage() {
 }
 function renderSharing() {
   const connected = sessions.get(active)?.meta.status === 'connected';
-  $('preview-toggle').textContent = `미리보기 ${previewEnabled ? 'ON' : 'OFF'}`; $('preview-toggle').setAttribute('aria-pressed', String(previewEnabled));
-  $('send-message').textContent = previewEnabled ? 'Preview →' : '전송 ↵'; $('send-message').setAttribute('aria-label', previewEnabled ? 'Preview message' : 'Send message');
+  $('preview-toggle').textContent = `전송 전 확인 ${previewEnabled ? 'ON' : 'OFF'}`; $('preview-toggle').setAttribute('aria-pressed', String(previewEnabled)); $('preview-toggle').title = 'AI로 보내기 전 질문·첨부·이전 대화의 내용을 확인합니다. 화면 공유 기능이 아닙니다.';
+  $('send-message').textContent = previewEnabled ? '내용 확인 →' : '전송 ↵'; $('send-message').setAttribute('aria-label', previewEnabled ? 'Preview message' : 'Send message');
   $('send-message').disabled = pendingRequests.has(active) || directRequests.has(active);
-  $('send-hint').textContent = previewEnabled ? 'Enter: 미리보기 · Shift+Enter: 줄바꿈' : 'Enter: 바로 전송 · Shift+Enter: 줄바꿈';
-  $('advice-toggle').textContent = `AI 자동 조언 ${adviceState.enabled ? 'ON · 중지' : 'OFF'}`; $('advice-toggle').setAttribute('aria-pressed', String(adviceState.enabled));
+  $('send-hint').textContent = previewEnabled ? 'Enter: 전송 내용 확인 · Shift+Enter: 줄바꿈' : 'Enter: 바로 전송 · Shift+Enter: 줄바꿈';
+  $('advice-toggle').textContent = `AI 터미널 공유 ${adviceState.enabled ? 'ON · 중지' : 'OFF'}`; $('advice-toggle').setAttribute('aria-pressed', String(adviceState.enabled));
   $('advice-toggle').disabled = !adviceState.enabled && (!connected || !auth.activeAccountId || !models.length);
   $('advice-toggle').title = adviceState.enabled ? '이후 자동 전송을 중지합니다.' : !connected ? '먼저 SSH 세션에 연결해 주세요.' : !auth.activeAccountId || !models.length ? 'ChatGPT 로그인과 모델 선택이 필요합니다.' : '공유할 계정·모델·출력 범위를 확인한 뒤 켤 수 있습니다.';
   $('advice-status').hidden = !adviceState.enabled && !adviceState.reason;
-  const reason = { stopped: '사용자가 중지했습니다.', cancelled: '응답을 취소했습니다.', 'tab-changed': '다른 탭으로 이동했습니다.', 'tab-closed': '세션 탭을 닫았습니다.', 'model-changed': '모델이 바뀌었습니다.', 'account-changed': '계정 또는 인증 상태가 바뀌었습니다.', 'connection-changed': 'SSH 연결이 바뀌거나 끊겼습니다.', 'context-changed': '공유 대상이 바뀌었습니다.', 'conversation-reset': '새 대화를 시작했습니다.', 'limit-reached': '10회 안내를 완료했습니다. 계속하려면 다시 켜세요.', 'request-failed': 'AI 요청이 실패했습니다. 다시 켜기 전 연결과 사용 한도를 확인하세요.', 'renderer-restarted': '화면이 다시 시작됐습니다.' }[adviceState.reason] || '다시 켜려면 공유 범위를 확인하세요.';
-  $('advice-status').textContent = adviceState.enabled ? `새 SSH 출력 자동 공유 중 · ${adviceState.remaining}회 남음` : `자동 공유 중지 · ${reason}${adviceState.error ? ` ${errorText(adviceState.error)}` : ''}`;
-  $('sharing-privacy').textContent = adviceState.enabled ? '동의한 새 SSH 출력과 이 대화의 이전 내용이 공유됩니다.' : '질문·직접 첨부한 출력·이 대화의 이전 내용이 전송됩니다.';
+  const reason = { stopped: '사용자가 중지했습니다.', cancelled: '응답을 취소했습니다.', 'tab-changed': '다른 탭으로 이동했습니다.', 'tab-closed': '세션 탭을 닫았습니다.', 'model-changed': '모델이 바뀌었습니다.', 'account-changed': '계정 또는 인증 상태가 바뀌었습니다.', 'connection-changed': 'SSH 연결이 바뀌거나 끊겼습니다.', 'context-changed': '공유 대상이 바뀌었습니다.', 'conversation-reset': '새 대화를 시작했습니다.', 'request-failed': 'AI 요청이 실패했습니다. 다시 켜기 전 연결과 사용 한도를 확인하세요.', 'renderer-restarted': '화면이 다시 시작됐습니다.' }[adviceState.reason] || '다시 켜려면 공유 범위를 확인하세요.';
+  $('advice-status').textContent = adviceState.enabled ? '새 SSH 출력 자동 공유 중 · 횟수 제한 없음' : `자동 공유 중지 · ${reason}${adviceState.error ? ` ${errorText(adviceState.error)}` : ''}`;
+  $('sharing-privacy').textContent = adviceState.enabled ? '현재 SSH 출력과 이 대화의 이전 내용만 공유합니다. 화면 캡처는 공유하지 않습니다.' : '질문·직접 첨부·이전 대화를 전송합니다. 화면 캡처는 공유하지 않습니다.';
+  $('terminal-paste').disabled = !connected;
+  $('terminal-clear').disabled = !sessions.has(active);
 }
 async function submitMessage() {
   if (pendingRequests.has(active) || directRequests.has(active)) return;
@@ -227,7 +257,7 @@ async function toggleAdvice() {
   if (adviceState.enabled) { adviceState = await call('adviceStop'); renderSharing(); return; }
   const prepared = await call('advicePrepare', { sessionId: active, model: $('model').value });
   const body = modal('AI 자동 조언 켜기', () => call('adviceStop'));
-  body.append(el('p', `공유할 SSH 세션: ${prepared.target.username}@${prepared.target.host}:${prepared.target.port}\nChatGPT 계정: ${prepared.account}\n모델: ${prepared.model}`), el('p', '켜는 시점 이후 앱에서 이 세션의 새 터미널·실행 출력을 수신할 때만 자동 공유합니다. 최근 출력 최대 8KB를 모아 출력이 잠시 멈추거나 최대 10초가 지나면 안내를 요청합니다. 최소 1분 간격, 최대 10회이며 질문과 기존 대화도 요청에 포함됩니다.'), el('p', '화면 캡처나 다른 세션은 읽지 않습니다. 로컬 비밀 가림은 완벽하지 않습니다. 끄면 이후 전송을 중지하지만 이미 보낸 내용은 회수할 수 없습니다. 계정·모델·탭·연결·대화가 바뀌면 꺼집니다. 명령 실행은 별도 승인이 필요합니다.'));
+  body.append(el('p', `공유할 SSH 세션: ${prepared.target.username}@${prepared.target.host}:${prepared.target.port}\nChatGPT 계정: ${prepared.account}\n모델: ${prepared.model}`), el('p', '켜는 시점 이후 앱에서 이 세션의 새 터미널·실행 출력을 수신할 때만 자동 공유합니다. 최근 출력 최대 8KB를 모아 출력이 잠시 멈추거나 최대 10초가 지나면 안내를 요청합니다. 최소 1분 간격이며 횟수 제한 없이 직접 끌 때까지 동작합니다. 오래된 AI 대화 맥락은 최근 64KB로 정리되며, 정리 시 채팅에 표시합니다.'), el('p', '화면 캡처나 다른 세션은 읽지 않습니다. 로컬 비밀 가림은 완벽하지 않습니다. 끄면 이후 전송을 중지하지만 이미 보낸 내용은 회수할 수 없습니다. 계정·모델·탭·연결·대화가 바뀌면 꺼집니다. 명령 실행은 별도 승인이 필요합니다.'));
   const consent = field(body, '이 세션의 새 출력을 ChatGPT에 자동 공유하는 데 동의합니다', 'advice-consent', 'checkbox');
   const enable = button('동의하고 켜기', async () => { enable.disabled = true; try { adviceState = await call('adviceEnable', prepared.token); modalCancel = null; clearModal(); renderSharing(); } catch (e) { clearModal(); notice('공유 동의가 만료되었거나 대상이 바뀌었습니다. AI 자동 조언 버튼에서 다시 확인해 주세요.'); } }, 'mint'); enable.disabled = true; consent.onchange = () => { enable.disabled = !consent.checked; };
   actions(body, [button('Cancel', clearModal), enable]);
@@ -237,11 +267,12 @@ async function showExecution(command) {
   const e = await call('execution', { id: active, command });
   const body = modal('Review command execution', () => call('cancelExecution', e.id));
   body.append(el('p', `Trusted SSH target: ${e.target.username}@${e.target.host}:${e.target.port}\nSession ${e.sessionId}\nGeneration ${e.generation}`), el('div', e.target.fingerprint, { class: 'fingerprint' }), el('pre', e.command), el('p', 'Separate SSH exec channel. Server default login environment. Does not inherit the terminal directory or environment. Current directory, shell and effective privileges are unknown.'), el('p', `Risks: ${e.policy.risks.join(', ') || 'Remote executables and startup configuration can have side effects.'}`, { class: 'danger' }));
-  if (!e.policy.allowed) body.append(el('p', `Execution blocked: ${e.policy.reasons.join(', ')}. Review and enter manually if appropriate.`, { class: 'modal-error' }));
+  body.append(el('p', '명령 이름에 따른 허용 목록 제한은 없습니다. 승인하면 표시된 명령을 그대로 한 번 실행합니다. 입력이 필요한 프로그램은 터미널에 넣어 사용하세요.'));
+  if (!e.policy.allowed) body.append(el('p', '명령에 숨겨진 제어 문자가 있거나 길이가 올바르지 않아 실행할 수 없습니다. 명령을 다시 입력해 주세요.', { class: 'modal-error' }));
   const approve = button('Approve & run once', async () => { approve.disabled = true; await call('approve', e.token); modalCancel = null; clearModal(); }, 'mint'); approve.disabled = !e.token;
-  actions(body, [button('Cancel', clearModal), approve]);
+  actions(body, [button('Cancel', clearModal), button('터미널에 넣기', async () => { await call('cancelExecution', e.id); modalCancel = null; clearModal(); await insertCommand(e.command, e.sessionId); }), approve]);
 }
-function commandCard(card, id) { const node = el('section', null, { class: 'suggestion' }); const heading = el('div', 'Suggested command', { class: 'suggestion-title' }); heading.prepend(icon('cutout-88-adea854f6b8d.png')); node.append(heading, el('code', card.command, { class: 'command' })); const row = el('div', null, { class: 'actions' }); row.append(button('Copy', () => call('copy', card.command)), button('Review & run', () => { if (active !== id) return notice('Select the source SSH tab first.'); return showExecution(card.command); }, 'mint')); const note = el('p', 'Separate approval required. No safety guarantee.', { class: 'approval-note' }); note.prepend(icon('cutout-93-eb28c1dfa39f.png')); node.append(row, note); conversation(id).push(node); }
+function commandCard(card, id) { const node = el('section', null, { class: 'suggestion' }); const heading = el('div', 'Suggested command', { class: 'suggestion-title' }); heading.prepend(icon('cutout-88-adea854f6b8d.png')); node.append(heading, el('code', card.command, { class: 'command' })); const row = el('div', null, { class: 'actions' }); row.append(button('Copy', () => call('copy', card.command)), button('Review & run', () => { if (active !== id) return notice('Select the source SSH tab first.'); return showExecution(card.command); }, 'mint'), button('터미널에 넣기', () => insertCommand(card.command, id))); const note = el('p', 'Separate approval required. No safety guarantee.', { class: 'approval-note' }); note.prepend(icon('cutout-93-eb28c1dfa39f.png')); node.append(row, note); conversation(id).push(node); }
 async function restoreModel(id = active) {
   const result = await call('sessionModel', id); if (id !== active) return;
   $('model').value = models.some(m => m.slug === result.model) ? result.model : models[0]?.slug || '';
@@ -311,6 +342,10 @@ function settings() {
   body.append(el('p', `KeyShell ${settings.version} · ${settings.packaged ? 'Packaged build' : 'Development build'}\nAuthentication storage: ${auth.persistence === 'encrypted' ? 'OS encrypted storage available' : 'Memory only'}.`), el('p', 'SSH credentials stay in memory. Saved connection profiles, trusted host keys and ChatGPT account registration metadata (email, identity, client ID and host ID) persist locally. ChatGPT tokens persist only when you opt into OS-encrypted storage. Sign-out removes tokens while keeping account registration mappings for future sign-in. Conversations, terminal output and execution records stay in memory and are discarded when the app exits. Nothing reconnects, sends or executes automatically after restart.'));
   for (const session of sessions.values()) if (session.meta.error === 'E-SSH-HOSTKEY-CHANGED') body.append(button(`Recover trusted key: ${session.meta.host}:${session.meta.port}`, () => recoverTrust(session.meta.sessionId)));
   const remember = field(body, 'Remember ChatGPT login using OS encryption', 'remember', 'checkbox'); remember.disabled = auth.persistence !== 'encrypted';
+  body.append(el('h3', '터미널 화면 설정'));
+  const font = field(body, '글자 크기 (8–32px)', 'terminal-font', 'number', String(terminalOptions.fontSize)); font.min = '8'; font.max = '32'; font.step = '1'; font.required = true;
+  const scrollback = field(body, '스크롤 기록 줄 수 (1,000–50,000)', 'terminal-scrollback', 'number', String(terminalOptions.scrollback)); scrollback.min = '1000'; scrollback.max = '50000'; scrollback.step = '1000'; scrollback.required = true;
+  body.append(button('터미널 설정 적용', () => { if (!font.reportValidity() || !scrollback.reportValidity()) return; const next = { fontSize: Number(font.value), scrollback: Number(scrollback.value) }; if (!Number.isInteger(next.fontSize) || !Number.isInteger(next.scrollback)) return; applyTerminalOptions(next); notice('터미널 화면 설정을 적용했습니다.'); }));
   const signIn = button('Sign in', () => login(remember.checked)), signOut = button('Sign out', async () => showLogoutResult(await call('logout'))), cancel = button('Cancel sign-in', cancelLogin);
   signIn.id = 'settings-sign-in'; signOut.id = 'settings-sign-out'; cancel.id = 'settings-cancel-login';
   actions(body, [cancel, signIn, signOut, button('Done', clearModal)]); renderSettingsAuth();
@@ -342,8 +377,11 @@ window.keyshell.subscribe(safe(async ({ type, detail }) => {
     if (detail.status === 'running') { const stop = button('Request remote TERM', async () => { await call('cancelExecution', detail.id); stop.disabled = true; }); node.append(stop); }
   } else if (type === 'change') { loginPending = false; loginError = ''; if (!$('settings-auth-status') || !$('modal').open) clearModal(); discardSelection(); attachment = null; conversations.clear(); renderMessages(); renderAttachment(); $('cancel-login').hidden = true; await renderAuth(detail); }
   else if (type === 'auth-error') { if (detail.code === 'E-AUTH-CANCELLED') return; loginPending = false; loginError = errorText(detail.code); $('cancel-login').hidden = true; renderSettingsAuth(); notice(detail.code); }
+  else if (type === 'terminal-paste') { await presentPaste(detail.sessionId, detail.preview); }
+  else if (type === 'clipboard-error') { notice(detail.code); }
   else if (type === 'advice') { adviceState = detail; renderSharing(); }
   else if (type === 'manual-question' || type === 'automatic-question') {
+    if (detail.historyTrimmed) message('오래된 AI 맥락을 정리하고 최근 대화와 새 SSH 출력을 기준으로 안내합니다. 화면의 이전 메시지는 그대로 남습니다.', 'request-status', detail.sessionId);
     message(`${type === 'automatic-question' ? '자동 조언 요청\n' : ''}${detail.text}`, 'question', detail.sessionId);
   }
   else if (type === 'ai') {
@@ -361,6 +399,9 @@ for (const b of document.querySelectorAll('[data-new]')) b.onclick = () => newCo
 for (const b of document.querySelectorAll('[data-window]')) b.onclick = safe(() => call('window', b.dataset.window));
 $('search').oninput = renderProfiles;
 $('settings').onclick = settings; $('update').onclick = safe(() => updateDialog());
+$('terminal-paste').onclick = safe(() => pasteClipboard());
+$('terminal-clear').onclick = () => { sessions.get(active)?.term.clear(); sessions.get(active)?.term.focus(); };
+$('terminal-font-down').onclick = () => resizeTerminalFont(-1); $('terminal-font-up').onclick = () => resizeTerminalFont(1);
 $('disconnect').onclick = safe(() => closeSession(active)); $('reconnect').onclick = () => { const m = sessions.get(active).meta; newConnection({ host: m.host, port: m.port, username: m.username, name: m.name, id: m.id, group: m.group }); };
 $('copy-selection').onclick = safe(() => { const choice = validSelection(); if (!choice) { discardSelection(); return; } return call('copy', choice.text); });
 $('clear-selection').onclick = discardSelection;

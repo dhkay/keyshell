@@ -39,52 +39,25 @@ function validateCredentials(c) {
   }
   fail('E-SSH-AUTH-UNSUPPORTED');
 }
-// Deliberately small grammar: no shell expansion, operators, quoting, scripts or
-// arbitrary executables. Even these utilities can have server-specific effects.
+// User review authorizes the exact command, not a fixed executable allow-list.
+// Risks are advisory; only malformed or hidden-control input is rejected.
 function inspectCommand(command) {
   const reasons = [], risks = [];
   if (typeof command !== 'string' || !command.trim() || Buffer.byteLength(command) > LIMITS.command) reasons.push('invalid-size');
-  if (typeof command !== 'string') return { allowed: false, reasons, risks };
-  if (/[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(command)) return { allowed: false, reasons: [...reasons, 'control-whitespace'], risks };
-  // Single quotes are parsed only as literal arguments; interpolation and nested
-  // shell structures remain forbidden even inside quotes.
-  const words = []; let remaining = command.trim();
-  while (remaining) {
-    const match = /^(?:'([A-Za-z0-9_/. :,+%=-]*)'|([A-Za-z0-9_/. :,+%=-]+?))(?= |$)/.exec(remaining);
-    if (!match) { reasons.push('unreviewable-shell-syntax'); break; }
-    words.push(match[1] ?? match[2]); remaining = remaining.slice(match[0].length).trimStart();
-  }
-  let cmd = words[0], args = words.slice(1);
-  if (cmd === 'sudo') {
-    risks.push('privilege-change');
-    if (args[0] !== '-n') reasons.push('interactive-or-privileged-context');
-    else { cmd = args[1]; args = args.slice(2); }
-  }
-  const rules = {
-    pwd: a => a.length === 0,
-    whoami: a => a.length === 0,
-    hostname: a => a.length === 0,
-    uptime: a => a.length === 0,
-    id: a => a.length === 0,
-    uname: a => a.every(x => /^-[asnrvmipo]+$/.test(x)),
-    ls: a => a.every(x => /^-[alhndrtS]+$/.test(x) || x.startsWith('/')),
-    cat: a => a.length > 0 && a.every(x => x.startsWith('/')),
-    df: a => a.every(x => /^-[hPTik]+$/.test(x) || x.startsWith('/')),
-    du: a => a.every(x => /^-[hskx]+$/.test(x) || x.startsWith('/')),
-    rm: a => a.length > 0 && a.some(x => x.startsWith('/')) && a.every(x => /^-[rfiv]+$/.test(x) || x.startsWith('/')),
-    chmod: a => a.length >= 2 && /^[0-7]{3,4}$/.test(a[0]) && a.slice(1).every(x => x.startsWith('/')),
-    systemctl: a => a.length >= 2 && a.length <= 3 && ['status', 'stop', 'restart', 'start'].includes(a[0]) && /^[\w@.-]+$/.test(a[1]) && (a.length === 2 || a[2] === '--no-pager'),
-    ss: a => a.length >= 1 && a.length <= 2 && /^-[ltnpua]+$/.test(a[0]) && (a.length === 1 || /^(?:sport|dport) = :[0-9]{1,5}$/.test(a[1])),
-    journalctl: a => { if (!a.includes('--no-pager')) return false; for (let i = 0; i < a.length; i++) { if (['--no-pager', '-xe', '-x', '-e'].includes(a[i])) continue; if (['-u', '--unit'].includes(a[i]) && /^[\w@.-]+$/.test(a[++i] || '')) continue; if (['-n', '--lines'].includes(a[i]) && /^[0-9]{1,5}$/.test(a[++i] || '')) continue; return false; } return true; }
-  };
-  if (!Object.hasOwn(rules, cmd) || !rules[cmd](args)) reasons.push('unreviewed-command-or-context');
-  if (['curl', 'wget', 'scp', 'rsync', 'ssh', 'nc', 'sftp'].includes(cmd)) reasons.push('external-transfer-unverified');
-  if (['sudo', 'su'].includes(cmd)) { risks.push('privilege-change'); reasons.push('interactive-or-privileged-context'); }
-  if (cmd === 'rm') risks.push('deletion');
-  if (cmd === 'chmod') risks.push('permission-change');
-  if (cmd === 'systemctl' && args[0] !== 'status') risks.push('service-change');
-  return { allowed: reasons.length === 0, reasons, risks, safetyGuaranteed: false, externalTransfer: null,
-    limitations: ['Server executables and login startup configuration can have side effects.', 'No interactive-shell directory or environment is inherited.'] };
+  if (typeof command !== 'string') return { allowed: false, reasons, risks, safetyGuaranteed: false };
+  if (/[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/.test(command) || !command.isWellFormed()) reasons.push('hidden-control-characters');
+  if (/[\n]/.test(command)) risks.push('multiple-lines');
+  if (/[;&|<>]/.test(command)) risks.push('compound-shell-command');
+  if (/[$`]/.test(command)) risks.push('shell-expansion');
+  if (/\b(?:sudo|su|doas)\b/.test(command)) risks.push('privilege-change');
+  if (/\b(?:rm|rmdir|shred|unlink)\b/.test(command)) risks.push('deletion');
+  if (/\b(?:chmod|chown|chgrp)\b/.test(command)) risks.push('permission-change');
+  if (/\b(?:systemctl|service)\b/.test(command) && /\b(?:stop|restart|start|reload|disable|enable)\b/.test(command)) risks.push('service-change');
+  const transfer = /\b(?:curl|wget|scp|rsync|ssh|nc|sftp)\b/.test(command);
+  if (transfer) risks.push('external-transfer');
+  if (/\b(?:vim?|nano|less|more|top|htop|passwd|read)\b/.test(command)) risks.push('interactive-command');
+  return { allowed: reasons.length === 0, reasons, risks, safetyGuaranteed: false, externalTransfer: transfer ? true : null,
+    limitations: ['Server executables and login startup configuration can have side effects.', 'No interactive-shell directory or environment is inherited.', 'Interactive input is unavailable in a separate execution channel; use the terminal for interactive commands.'] };
 }
 function redactSecrets(input) {
   if (typeof input !== 'string' || Buffer.byteLength(input) > LIMITS.selection) fail('E-SHARE-SIZE');

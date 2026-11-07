@@ -21,7 +21,7 @@ test('profile groups validate and preserve an explicit group', () => {
 test('IPC tab/account invalidation cancels only pending execution approvals and stale paste tokens', async () => {
   const frame = { url: 'keyshell://app/index.html' }, wc = { mainFrame: frame, send() {} }, window = { webContents: wc, isDestroyed: () => false };
   const ssh = new EventEmitter(); ssh.executions = new Map([['pending', { id: 'pending', status: 'pending' }], ['running', { id: 'running', status: 'running' }]]);
-  ssh.listSessions = () => [{ sessionId: 'first' }, { sessionId: 'second' }]; ssh.cancelExecution = id => { ssh.executions.get(id).status = 'cancelled'; };
+  ssh.listSessions = () => [{ sessionId: 'first', status: 'connected', generation: 'one' }, { sessionId: 'second', status: 'connected', generation: 'two' }]; ssh.cancelExecution = id => { ssh.executions.get(id).status = 'cancelled'; };
   const ai = new EventEmitter(); let invalidations = 0; ai.invalidatePreviews = () => invalidations++;
   const auth = new EventEmitter(), updates = new EventEmitter(); let handler;
   const ipcMain = { handle(_name, fn) { handler = fn; }, removeHandler() {} };
@@ -84,4 +84,24 @@ test('review: trust rotation IPC requires observed mismatch and explicit indepen
   let p = await handler(event, 'rotatePreview', 'changed'); assert.deepEqual(p.value.old, old); assert.deepEqual(p.value.next, next);
   assert.equal((await handler(event, 'rotateConfirm', { token: p.value.token, verified: false })).error, 'E-SSH-HOSTKEY-ANSWER'); assert.equal(rotations, 0);
   p = await handler(event, 'rotatePreview', 'changed'); assert.equal((await handler(event, 'rotateConfirm', { token: p.value.token, verified: true })).ok, true); assert.equal(rotations, 1); assert.equal((await handler(event, 'rotateConfirm', { token: p.value.token, verified: true })).ok, false); remove();
+});
+
+test('clipboard paste is explicit, generation-bound and one-shot; context menu never reads clipboard before paste is chosen', async () => {
+  let handler, menu; const events = [], writes = []; let reads = 0, generation = 'one';
+  const ssh = new EventEmitter(); ssh.executions = new Map(); ssh.listSessions = () => [{ sessionId: 'first', status: 'connected', generation }]; ssh.write = (id, data) => { writes.push({ id, data }); return { accepted: true }; };
+  const ai = new EventEmitter(); ai.invalidatePreviews = () => {}; const auth = new EventEmitter(), updates = new EventEmitter();
+  const wc = { mainFrame: { url: 'keyshell://app/index.html' }, send: (_channel, event) => events.push(event) };
+  const remove = installIPC({ ipcMain: { handle: (_name, fn) => { handler = fn; }, removeHandler() {} }, window: { webContents: wc, isDestroyed: () => false }, ssh, ai, auth, updates, store: {}, app: {}, dialog: {}, clipboard: { readText: async () => { reads++; return 'php -v'; }, async writeText() {} }, Menu: { buildFromTemplate: items => { menu = items; return { popup() {} }; } } });
+  const event = { sender: wc, senderFrame: wc.mainFrame };
+  try {
+    await handler(event, 'activate', 'first');
+    const stale = await handler(event, 'clipboardPastePreview', 'first'); assert.equal(reads, 1); assert.equal(writes.length, 0);
+    generation = 'two'; assert.equal((await handler(event, 'paste', stale.value.token)).error, 'E-TERM-STALE');
+    await handler(event, 'terminalContextMenu', { id: 'first', selection: 'selected' }); assert.equal(reads, 1); assert.equal(menu[1].label, '붙여넣기');
+    await menu[1].click(); assert.equal(reads, 2); const paste = events.find(e => e.type === 'terminal-paste').detail.preview;
+    assert.equal(writes.length, 0); assert.equal((await handler(event, 'paste', paste.token)).ok, true); assert.deepEqual(writes, [{ id: 'first', data: 'php -v' }]);
+    assert.equal((await handler(event, 'paste', paste.token)).error, 'E-TERM-STALE');
+    const multiple = await handler(event, 'pastePreview', { id: 'first', data: 'echo first\necho second\n' }); assert.equal(multiple.value.confirmationRequired, true); assert.equal(writes.length, 1);
+    await handler(event, 'activate', 'general'); await menu[1].click(); assert.equal(reads, 2); assert.equal(events.at(-1).type, 'clipboard-error'); assert.equal(writes.length, 1);
+  } finally { remove(); }
 });

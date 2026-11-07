@@ -6,7 +6,7 @@ const APP_URL = 'keyshell://app/index.html';
 function trustedFrame(event, window) {
   return !!event.senderFrame && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && event.senderFrame.url === APP_URL;
 }
-function installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, app, clipboard }) {
+function installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, app, clipboard, Menu }) {
   let active = 'general', startingAttempt = null, recovery = null; const keys = new Set(), pastes = new Map(), attempts = new Map(), sessionAttempts = new Map(), rotations = new Map();
   let previewEnabled = false;
   const advice = new AutoAdvice({ ssh, ai, auth, getActive: () => active });
@@ -17,9 +17,17 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, ap
     for (const e of ssh.executions.values()) if (e.status === 'pending') ssh.cancelExecution(e.id);
   };
   const current = id => { if (id !== active) fail('E-IPC-SESSION'); };
+  const pastePreview = (id, data) => {
+    current(id); const session = ssh.listSessions().find(s => s.sessionId === id && s.status === 'connected');
+    if (!session) fail('E-SSH-NOT-CONNECTED');
+    if (typeof data !== 'string' || Buffer.byteLength(data) > 65536 || data.includes('\0')) fail('E-TERM-INPUT');
+    if (!data) return { empty: true };
+    const token = randomUUID(); pastes.clear(); pastes.set(token, { id, generation: session.generation, data });
+    return { token, data, generation: session.generation, confirmationRequired: /[\r\n\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(data) };
+  };
   const methods = {
     terminalFocus: value => { if (typeof value !== 'boolean') fail('E-IPC-INPUT'); window.webContents.setIgnoreMenuShortcuts(value); },
-    copy: value => { if (typeof value !== 'string' || Buffer.byteLength(value) > 1048576) fail('E-IPC-INPUT'); clipboard.writeText(value); return { copied: true }; },
+    copy: async value => { if (typeof value !== 'string' || Buffer.byteLength(value) > 1048576) fail('E-IPC-INPUT'); await clipboard.writeText(value); return { copied: true }; },
     state: () => ({ profiles: store.listProfiles(), sessions: ssh.listSessions(), auth: auth.state(), version: app.getVersion(), packaged: app.isPackaged, updates: updates.state, recovery, previewEnabled, advice: advice.state(), executions: [...ssh.executions.values()].map(e => { const { stream, token, ...view } = e; return view; }) }),
     activate: id => { if (typeof id !== 'string' || !/^[\w-]{1,128}$/.test(id)) fail('E-SSH-SESSION'); if (id !== active) { advice.stop('tab-changed'); invalidate(); active = id; } return { active, advice: advice.state() }; },
     connect: ({ attemptId, profile, credentials, save }) => {
@@ -57,8 +65,17 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, ap
     hostKey: ({ id, trust }) => { if (typeof id !== 'string' || typeof trust !== 'boolean') fail('E-IPC-INPUT'); return ssh.answerHostKey(id, trust); },
     write: ({ id, data }) => { current(id); return ssh.write(id, data); },
     resize: ({ id, cols, rows }) => ssh.resize(id, cols, rows),
-    pastePreview: ({ id, data }) => { current(id); if (typeof data !== 'string' || Buffer.byteLength(data) > 65536 || data.includes('\0')) fail('E-TERM-INPUT'); const token = require('node:crypto').randomUUID(); pastes.clear(); pastes.set(token, { id, data }); return { token, data, confirmationRequired: /[\r\n\x00-\x1f\x7f]/.test(data) }; },
-    paste: token => { const p = pastes.get(token); pastes.delete(token); if (!p) fail('E-TERM-STALE'); current(p.id); return ssh.write(p.id, p.data); },
+    pastePreview: ({ id, data }) => pastePreview(id, data),
+    clipboardPastePreview: async id => { current(id); if (!ssh.listSessions().some(s => s.sessionId === id && s.status === 'connected')) fail('E-SSH-NOT-CONNECTED'); let data; try { data = await clipboard.readText(); } catch { fail('E-CLIPBOARD-READ'); } return pastePreview(id, data); },
+    paste: token => { const p = pastes.get(token); pastes.delete(token); if (!p) fail('E-TERM-STALE'); current(p.id); if (!ssh.listSessions().some(s => s.sessionId === p.id && s.status === 'connected' && s.generation === p.generation)) fail('E-TERM-STALE'); return ssh.write(p.id, p.data); },
+    terminalContextMenu: ({ id, selection = '' }) => {
+      current(id); if (typeof selection !== 'string' || Buffer.byteLength(selection) > 1048576 || !Menu) fail('E-IPC-INPUT');
+      const connected = ssh.listSessions().some(s => s.sessionId === id && s.status === 'connected');
+      Menu.buildFromTemplate([
+        { label: '복사', enabled: !!selection, click: async () => { try { await clipboard.writeText(selection); } catch { publish('clipboard-error', { code: 'E-CLIPBOARD-WRITE' }); } } },
+        { label: '붙여넣기', enabled: connected, click: async () => { try { publish('terminal-paste', { sessionId: id, preview: await methods.clipboardPastePreview(id) }); } catch (e) { publish('clipboard-error', { code: e.code || 'E-TERM-INPUT' }); } } }
+      ]).popup({ window }); return { opened: true };
+    },
     chooseKey: async () => { const result = await dialog.showOpenDialog(window, { title: 'Choose SSH private key', properties: ['openFile'] }); if (result.canceled) return null; keys.add(result.filePaths[0]); return result.filePaths[0]; },
     login: async options => { if (!options || Object.keys(options).some(k => !['remember', 'accountId'].includes(k))) fail('E-AUTH-INPUT'); const r = await auth.beginLogin(options); r.completion.catch(e => publish('auth-error', { code: e.code || 'E-AUTH-LOGIN' })); return { pending: true }; },
     cancelLogin: () => auth.cancelLogin(), logout: () => auth.logout(), account: id => auth.selectAccount(id),

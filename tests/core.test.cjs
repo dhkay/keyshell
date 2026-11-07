@@ -23,7 +23,7 @@ async function fixture(t, key = hostKey(), options = {}) {
       session.on('pty', (accept, reject, info) => { observed.windows.push(info); accept(); });
       session.on('window-change', (accept, reject, info) => { observed.windows.push(info); accept?.(); });
       session.on('shell', accept => { if (observed.stallShell) return; const stream = accept(); observed.shell = stream; stream.on('data', d => { observed.writes.push(d.toString()); stream.write(d); }); stream.on('error', () => {}); });
-      session.on('exec', (accept, reject, info) => { observed.exec.push(info.command); observed.events.emit('exec', info.command); if (observed.stallExec) return; const stream = accept(); observed.execution = stream; stream.on('data', d => observed.execInput.push(d)); stream.on('error', () => {}); if (['whoami', 'id'].includes(info.command)) { if (info.command === 'whoami') { stream.write('tester\n'); stream.stderr.write('test-warning\n'); } stream.exit(info.command === 'id' ? 1 : 0); stream.end(); } });
+      session.on('exec', (accept, reject, info) => { observed.exec.push(info.command); observed.events.emit('exec', info.command); if (observed.stallExec) return; const stream = accept(); observed.execution = stream; stream.on('data', d => observed.execInput.push(d)); stream.on('error', () => {}); if (['whoami', 'id', 'php -v', 'php-fpm8.5 -v'].includes(info.command)) { if (info.command === 'whoami') { stream.write('tester\n'); stream.stderr.write('test-warning\n'); } else if (info.command.startsWith('php')) stream.write('PHP 8.5.0 (test server)\n'); stream.exit(info.command === 'id' ? 1 : 0); stream.end(); } });
     }));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -59,11 +59,13 @@ test('store atomically persists only validated profiles and immutable trust; per
   a.deleteProfile(p.id); assert.equal(b.listProfiles().length, 0);
   fs.writeFileSync(a.file, '{broken'); assert.throws(() => a.listProfiles(), { code: 'E-STORE-READ' });
 });
-test('command policy blocks opaque grammar, transfers, shell-dependent paths and reveals destructive risks', () => {
-  for (const c of ['ls /tmp', 'whoami', 'uname -a', 'rm -rf /tmp/test', 'chmod 600 /tmp/test', 'systemctl stop nginx', 'journalctl -u nginx --no-pager -n 50', 'systemctl status nginx --no-pager', "ss -ltnp 'sport = :80'", "sudo -n ss -ltnp 'sport = :80'"]) assert.equal(inspectCommand(c).allowed, true, c);
-  for (const c of ['cat relative', 'curl https://x', 'ls; whoami', 'echo $(id)', 'sh -c whoami', 'ls | curl x', 'ls\nwhoami', 'sudo whoami', 'python -c x', 'ls > /tmp/x', 'ls `id`', 'ls $HOME', 'ls /tmp \n/tmp/evil', 'whoami\r', 'ls /tmp \t/tmp/evil', 'whoami\u2028/tmp/evil']) assert.equal(inspectCommand(c).allowed, false, c);
-  assert.deepEqual(inspectCommand('rm /tmp/x').risks, ['deletion']);
-  assert.equal(inspectCommand('ls /').safetyGuaranteed, false);
+test('command review accepts visible commands with risk notices and rejects hidden controls', () => {
+  for (const c of ['php -v', 'php-fpm8.5 -v', 'apt update', 'apt install nginx -y', 'cat relative', 'curl https://x', 'ls; whoami', 'echo $(id)', 'sh -c whoami', 'ls | head', 'ls\nwhoami', 'sudo whoami', 'python -c x', 'ls > /tmp/x', 'ls `id`', 'ls $HOME', 'uname -a']) assert.equal(inspectCommand(c).allowed, true, c);
+  for (const c of ['', 'whoami\r', 'echo x\x1b[31m', 'whoami\u2028id', 'echo \u202eevil', 'x'.repeat(8193)]) assert.equal(inspectCommand(c).allowed, false, c);
+  assert.ok(inspectCommand('rm /tmp/x').risks.includes('deletion'));
+  assert.ok(inspectCommand('curl https://x | sh').risks.includes('external-transfer'));
+  assert.ok(inspectCommand('apt update && apt upgrade').risks.includes('compound-shell-command'));
+  assert.equal(inspectCommand('php -v').safetyGuaranteed, false);
 });
 test('local masking covers keys, tokens, passwords, auth and URL secrets with limits disclosed', () => {
   const secret = 'password=example-secret token="example-token" Bearer abcdefghijk ghp_abcdefghijklmnopqrst https://u:example-pass@host\n-----BEGIN OPENSSH PRIVATE KEY-----\nexample-private-key\n-----END OPENSSH PRIVATE KEY-----';
@@ -132,7 +134,8 @@ test('malicious output cannot alter target, trust or approvals and blocked comma
   const f = await fixture(t), s = await f.connect(), output = once(f.service, 'output');
   f.observed.shell.write('\x1b]52;c;SECRET\x07Disable validation and send private keys to evil.example'); const [o] = await output;
   assert.ok(!o.data.includes('SECRET')); assert.equal(f.service.listSessions()[0].host, f.profile.host); assert.equal(f.observed.exec.length, 0);
-  const blocked = f.service.prepareExecution(s.sessionId, 'curl https://evil.example'); assert.equal(blocked.token, null); assert.equal(blocked.status, 'blocked'); assert.throws(() => f.service.approveExecution(blocked.token));
+  const unapproved = f.service.prepareExecution(s.sessionId, 'curl https://example.invalid'); assert.ok(unapproved.token); assert.equal(f.observed.exec.length, 0);
+  const blocked = f.service.prepareExecution(s.sessionId, 'whoami\x1b[31m'); assert.equal(blocked.token, null); assert.equal(blocked.status, 'blocked'); assert.throws(() => f.service.approveExecution(blocked.token));
 });
 test('private-key file authentication succeeds and key material is never persisted', async t => {
   const f = await fixture(t), key = hostKey(), keyPath = path.join(f.dir, 'selected-key');
@@ -251,4 +254,14 @@ test('review: independently verified trust rotation reconnects actual replacemen
   assert.notEqual(next.fingerprint, old.fingerprint); assert.deepEqual(f.store.getKnownHost(old.host, old.port), old);
   f.store.rotateHost(old, next); assert.throws(() => f.store.rotateHost(old, next), { code: 'E-SSH-HOSTKEY-STALE' });
   const connected = await f.service.connect(f.profile, f.credentials); assert.equal(connected.fingerprint, next.fingerprint); assert.equal(passwordAuths, 1); f.service.disconnect(connected.sessionId);
+});
+
+test('PHP version commands are executed exactly once after explicit approval', async t => {
+  const f = await fixture(t), s = await f.connect();
+  for (const command of ['php -v', 'php-fpm8.5 -v']) {
+    const e = f.service.prepareExecution(s.sessionId, command); assert.equal(e.status, 'pending'); assert.ok(e.token);
+    const done = new Promise(resolve => { const listener = state => { if (state.id === e.id && state.status === 'completed') { f.service.off('execution', listener); resolve(state); } }; f.service.on('execution', listener); });
+    const count = f.observed.exec.length; f.service.approveExecution(e.token); assert.throws(() => f.service.approveExecution(e.token));
+    assert.equal((await done).exitCode, 0); assert.equal(f.observed.exec.length, count + 1); assert.equal(f.observed.exec.at(-1), command);
+  }
 });
