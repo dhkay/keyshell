@@ -1,0 +1,135 @@
+name: Publish verified development installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run:
+        description: Successful Development installers run ID
+        default: '42255868706'
+        required: true
+      source_sha:
+        description: Exact verified source commit
+        default: '216446618526afdb6503a962883fc68b652bd564'
+        required: true
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish-development.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      CANDIDATE_RUN: ${{ inputs.candidate_run || '42255868706' }}
+      SOURCE_SHA: ${{ inputs.source_sha || '216446618526afdb6503a962883fc68b652bd564' }}
+    steps:
+      - name: 검증된 빌드 출처 확인
+        shell: bash
+        run: |
+          [[ "$CANDIDATE_RUN" =~ ^[0-9]+$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          gh api "repos/$GH_REPO/actions/runs/$CANDIDATE_RUN" > candidate.json
+          node <<'NODE'
+          const c = require('./candidate.json');
+          if (c.conclusion !== 'success' || c.path !== '.github/workflows/installers.yml' || c.head_sha !== process.env.SOURCE_SHA || c.repository.full_name !== process.env.GH_REPO) throw new Error('검증된 설치파일 빌드와 출처가 일치하지 않습니다');
+          NODE
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+      - name: 기존 설치파일 다운로드 및 SHA256 검증
+        shell: bash
+        run: |
+          gh run download "$CANDIDATE_RUN" --repo "$GH_REPO" --pattern 'KeyShell-Development-*' --dir candidates
+          node <<'NODE'
+          const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
+          const version = require('./package.json').version;
+          if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('버전 형식 오류');
+          const expected = new Set([
+            `KeyShell-Development-${version}-windows-x64.exe`,
+            `KeyShell-Development-${version}-mac-x64.dmg`,
+            `KeyShell-Development-${version}-mac-arm64.dmg`,
+            `KeyShell-Development-${version}-linux-amd64.deb`,
+            `KeyShell-Development-${version}-linux-x86_64.AppImage`
+          ]);
+          fs.mkdirSync('release-assets');
+          const assets = [];
+          for (const group of ['windows-x64', 'mac-x64', 'mac-arm64', 'linux-x64']) {
+            const dir = path.join('candidates', 'KeyShell-Development-' + group);
+            const lines = fs.readFileSync(path.join(dir, 'SHA256SUMS.txt'), 'utf8').trim().split(/\r?\n/);
+            for (const line of lines) {
+              const match = /^([a-f0-9]{64})  ([^/\\]+)$/.exec(line);
+              if (!match) throw new Error('체크섬 항목 형식 오류');
+              const [, sha256, original] = match, name = original.replace('-win-', '-windows-');
+              if (!expected.delete(name)) throw new Error('예상하지 않은 파일 또는 중복: ' + name);
+              const source = path.join(dir, original), bytes = fs.readFileSync(source);
+              if (crypto.createHash('sha256').update(bytes).digest('hex') !== sha256) throw new Error('SHA256 불일치: ' + name);
+              fs.copyFileSync(source, path.join('release-assets', name));
+              assets.push({ name, sha256, size: bytes.length });
+            }
+          }
+          if (expected.size) throw new Error('필수 설치파일 누락');
+          const sums = assets.map(a => `${a.sha256}  ${a.name}`).join('\n') + '\n';
+          fs.writeFileSync('release-assets/SHA256SUMS.txt', sums);
+          assets.push({ name: 'SHA256SUMS.txt', size: Buffer.byteLength(sums), sha256: crypto.createHash('sha256').update(sums).digest('hex') });
+          fs.writeFileSync('asset-manifest.json', JSON.stringify(assets));
+          fs.appendFileSync(process.env.GITHUB_ENV, `RELEASE_TAG=v${version}-dev\nRELEASE_VERSION=${version}\n`);
+          console.log(assets.map(a => `${a.name}: ${a.size} bytes`).join('\n'));
+          NODE
+      - name: 개발용 릴리스 안내 준비
+        shell: bash
+        run: |
+          cat > release-notes.md <<'NOTES'
+          ## 다운로드
+          - Windows x64: `.exe` 실행 후 설치 (Windows 10 이상)
+          - Mac Apple Silicon: `mac-arm64.dmg` (macOS 13 이상)
+          - Mac Intel: `mac-x64.dmg` (macOS 13 이상)
+          - Linux x64: Ubuntu/Debian은 `.deb`, 설치 없이 실행하려면 `.AppImage`
+
+          모든 파일은 분할하지 않은 원본 설치파일입니다. `SHA256SUMS.txt`로 무결성을 확인할 수 있습니다.
+
+          ## 변경 사항
+          - ChatGPT 연결 여부와 계정을 설정 화면에 실시간 표시
+          - Enter 즉시 전송, Shift+Enter 줄바꿈, 한글 조합 Enter 보호
+          - 미리보기 ON/OFF (기본 OFF)
+          - SSH 세션별 AI 자동 조언 ON/OFF (기본 OFF, 공유 범위 확인 후 활성화)
+          - 자동 조언은 새 출력 최대 8KiB, 최소 60초 간격, 최대 10회
+          - 중복 전송, 취소 후 대기, 탭·계정·모델 변경 시 상태 처리 보완
+          - 제안된 명령 실행은 계속 별도 승인이 필요합니다.
+
+          ## 개발용 사전 릴리스
+          정식 Windows 인증서 서명과 Apple 공증은 적용되지 않았습니다. Mac 앱은 개발용 ad-hoc 서명입니다. OS 보안 정책에 따라 실행이 제한될 수 있으며 이 개발 빌드에서는 자동 업데이트를 설치하지 않습니다. 실제 계정의 OAuth 동의·플랜 권한·외부 AI 응답은 추가 확인 대상입니다.
+          NOTES
+          printf '\n검증한 소스: `%s`\n\n[검증 빌드 실행](https://github.com/%s/actions/runs/%s)\n' "$SOURCE_SHA" "$GH_REPO" "$CANDIDATE_RUN" >> release-notes.md
+      - name: 사전 릴리스 초안 생성 및 검증 파일 업로드
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo '같은 태그의 릴리스가 이미 있습니다. 기존 릴리스를 덮어쓰지 않습니다.'
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" --repo "$GH_REPO" --target "$SOURCE_SHA" --title "KeyShell $RELEASE_VERSION (개발용)" --draft --prerelease --latest=false --notes-file release-notes.md
+          gh release upload "$RELEASE_TAG" release-assets/* --repo "$GH_REPO"
+          gh api "repos/$GH_REPO/releases?per_page=100" > uploaded-releases.json
+          node <<'NODE'
+          const matches = require('./uploaded-releases.json').filter(r => r.tag_name === process.env.RELEASE_TAG);
+          if (matches.length !== 1) throw new Error('릴리스 초안을 확인할 수 없습니다');
+          const release = matches[0], expected = require('./asset-manifest.json');
+          if (!release.draft || !release.prerelease || release.target_commitish !== process.env.SOURCE_SHA || release.assets.length !== expected.length) throw new Error('릴리스 초안 또는 첨부 파일 상태가 일치하지 않습니다');
+          for (const item of expected) {
+            const found = release.assets.find(a => a.name === item.name);
+            if (!found || found.size !== item.size || (found.digest && found.digest !== 'sha256:' + item.sha256)) throw new Error('업로드 검증 실패: ' + item.name);
+          }
+          NODE
+      - name: 검증된 사전 릴리스 게시
+        shell: bash
+        run: |
+          gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --draft=false --prerelease --latest=false
+          gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json url,isDraft,isPrerelease,assets
