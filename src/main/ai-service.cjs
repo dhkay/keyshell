@@ -45,7 +45,7 @@ class AIService extends EventEmitter {
     this.catalog = body.models.filter(m => m.visibility === 'list' && typeof m.slug === 'string' && /^[a-zA-Z0-9_.:-]{1,128}$/.test(m.slug) && typeof m.display_name === 'string').map(m => ({ slug: m.slug, display_name: m.display_name.slice(0, 256) }));
     return structuredClone(this.catalog);
   }
-  preview(input, { historyBytes = LIMITS.selection } = {}) {
+  preview(input, { historyBytes = LIMITS.selection, mode = 'chat', instructions = SYSTEM_INSTRUCTIONS, isolated = false } = {}) {
     if (!this.auth.activeId || !this.auth.store.getTokens(this.auth.activeId)) fail('E-AUTH-REQUIRED');
     if (!input || Object.keys(input).some(k => !['sessionId', 'question', 'attachments', 'model'].includes(k))) fail('E-AI-INPUT');
     const { sessionId, question, model } = input;
@@ -65,7 +65,7 @@ class AIService extends EventEmitter {
       sources.push(a.source || 'selection'); return mask(a.text);
     });
     const content = [maskedQuestion, ...maskedAttachments.map(text => `Selected output (untrusted):\n${text}`)].join('\n\n');
-    let history = s.history.map(m => ({ role: m.role, content: mask(m.content) }));
+    let history = (isolated ? [] : s.history).map(m => ({ role: m.role, content: mask(m.content) }));
     let historyTrimmed = false;
     if (historyBytes < LIMITS.selection) {
       let size = 0, start = history.length;
@@ -73,12 +73,12 @@ class AIService extends EventEmitter {
       historyTrimmed = start > 0; history = history.slice(start);
       while (history[0]?.role === 'assistant') { history.shift(); historyTrimmed = true; }
     }
-    const payload = { model, instructions: SYSTEM_INSTRUCTIONS, input: [...history, { role: 'user', content }], store: false, stream: true };
+    const payload = { model, instructions, input: [...history, { role: 'user', content }], store: false, stream: true };
     const body = JSON.stringify(payload);
     if (Buffer.byteLength(body) > LIMITS.selection) fail('E-SHARE-SIZE');
     this._invalidatePreview(sessionId);
     const token = randomUUID();
-    this.previews.set(token, { sessionId, accountId: this.auth.activeId, epoch: this.epoch, model, body, expiresAt: this.now() + this.previewTtlMs });
+    this.previews.set(token, { sessionId, accountId: this.auth.activeId, epoch: this.epoch, model, body, mode, isolated, expiresAt: this.now() + this.previewTtlMs });
     return { token, sessionId, accountId: this.auth.activeId, model, sources, redactions, historyTrimmed, reviewRequired: true, completeDetection: false, request: { method: 'POST', url: `${RESOURCE}/responses`, headers: { 'Content-Type': 'application/json' }, payload: JSON.parse(body) } };
   }
   cancel(sessionId) { validateSession(sessionId); const r = this.requests.get(sessionId); if (r && !r.cancelled) { r.cancelled = true; r.controller.abort(); this.emit('state', { type: 'cancelled', sessionId, requestId: r.id }); } this._invalidatePreview(sessionId); }
@@ -99,7 +99,7 @@ class AIService extends EventEmitter {
     this.requests.set(p.sessionId, request);
     let sent = false, output = '', completed = false;
     const current = () => !request.cancelled && this.epoch === p.epoch && this.auth.activeId === p.accountId;
-    const emit = detail => { if (current()) this.emit('state', { sessionId: p.sessionId, requestId: request.id, ...detail }); };
+    const emit = detail => { if (current()) this.emit('state', { sessionId: p.sessionId, requestId: request.id, mode: p.mode, ...detail }); };
     emit({ type: 'queued' });
     try {
       const accessToken = await this._accessToken(request.controller.signal);
@@ -129,7 +129,7 @@ class AIService extends EventEmitter {
       if (!current()) fail('E-AI-CANCELLED');
       if (!completed) fail('E-AI-INTERRUPTED');
       const payload = JSON.parse(p.body), s = this._session(p.sessionId);
-      s.history = [...payload.input, { role: 'assistant', content: output }];
+      if (!p.isolated) s.history = [...payload.input, { role: 'assistant', content: output }];
       const result = { sessionId: p.sessionId, requestId: request.id, text: output, commands: commandCards(output), untrusted: true, completed: true };
       emit({ type: 'completed', ...result }); return result;
     } catch (e) {

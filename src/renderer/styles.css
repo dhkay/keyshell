@@ -10,3 +10,5 @@
 .sharing-controls{display:flex;flex-wrap:wrap;gap:7px}.sharing-controls button{font-size:12px;padding:5px 9px;border:1px solid #46595b;border-radius:6px;background:#1d282b;color:#cdd9db}.sharing-controls button[aria-pressed=true]{border-color:#63b98c;color:#a0efc1;background:#1c352a}.advice-status{font-size:12px;line-height:1.5;color:#9ee5b8;overflow-wrap:anywhere}.send-hint{font-size:11px;color:#93a6ac;margin-top:8px}.composer-bottom{flex-wrap:wrap;gap:8px}
 .request-status{font-size:12px;line-height:1.6;color:#b2c4c8;margin:10px 0}
 .session{flex-wrap:wrap}.session-right{display:flex;gap:6px;flex-wrap:wrap}
+
+.messages{overflow-anchor:none}

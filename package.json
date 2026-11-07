@@ -1,11 +1,11 @@
 {
   "name": "keyshell",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "User-controlled SSH desktop application",
   "type": "commonjs",
   "scripts": {
-    "test": "node --test tests/core.test.cjs tests/ai.test.cjs tests/desktop-unit.test.cjs tests/auto-advice.test.cjs",
+    "test": "node --test tests/core.test.cjs tests/ai.test.cjs tests/desktop-unit.test.cjs tests/auto-advice.test.cjs tests/automation.test.cjs",
     "check": "node scripts/check.cjs",
     "build": "node scripts/build.cjs",
     "start": "npm run build && electron .",

@@ -54,6 +54,7 @@ class AutoAdvice extends EventEmitter {
   }
   capture(d) {
     const g = this.grant;
+    if (this.shouldCapture?.(d) === false) return;
     if (!g || d.sessionId !== g.sessionId || d.generation !== g.generation || typeof d.data !== 'string' || !['terminal', 'execution'].includes(d.channel)) return;
     if (!this.valid(g)) { this.stop('context-changed'); return; }
     if (!g.buffer) g.pendingSince = this.now();

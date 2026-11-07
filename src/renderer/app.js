@@ -5,7 +5,11 @@ const call = (method, input) => window.keyshell.call(method, input);
 const sessions = new Map(), conversations = new Map(), pendingRequests = new Set();
 let connectionAttempt = null;
 let loginPending = false, loginError = '';
-let previewEnabled = false, adviceState = { enabled: false }, composing = false;
+let previewEnabled = false, adviceState = { enabled: false }, delegationState = { enabled: false }, composing = false;
+const chatViews = new Map();
+function chatView(id = active) { if (!chatViews.has(id)) chatViews.set(id, { follow: true, top: 0 }); return chatViews.get(id); }
+function bottomOfChat() { const view = chatView(); view.follow = true; $('messages').scrollTop = $('messages').scrollHeight; view.top = $('messages').scrollTop; }
+function restoreChatScroll() { const view = chatView(); $('messages').scrollTop = view.follow ? $('messages').scrollHeight : view.top; }
 const directRequests = new Map();
 let terminalOptions = { fontSize: 13, scrollback: 3000 };
 try { const stored = JSON.parse(localStorage.getItem('keyshell-terminal-options') || 'null'); if (stored && Number.isInteger(stored.fontSize) && stored.fontSize >= 8 && stored.fontSize <= 32 && Number.isInteger(stored.scrollback) && stored.scrollback >= 1000 && stored.scrollback <= 50000) terminalOptions = { fontSize: stored.fontSize, scrollback: stored.scrollback }; } catch {}
@@ -95,7 +99,7 @@ function newConnection(profile = {}) {
   };
   host.focus();
 }
-async function refreshProfiles() { const state = await call('state'); previewEnabled = state.previewEnabled; adviceState = state.advice; profiles = state.profiles; renderProfiles(); }
+async function refreshProfiles() { const state = await call('state'); previewEnabled = state.previewEnabled; adviceState = state.advice; delegationState = state.delegation; profiles = state.profiles; renderProfiles(); }
 const collapsed = new Set();
 function renderProfiles() {
   const nav = $('profiles'); nav.replaceChildren(); const query = $('search').value.toLowerCase();
@@ -114,11 +118,11 @@ function renderProfiles() {
   }
 }
 function conversation(id = active) { if (!conversations.has(id)) conversations.set(id, []); return conversations.get(id); }
-function renderMessages() { $('messages').replaceChildren(...conversation()); $('messages').scrollTop = $('messages').scrollHeight; }
+function renderMessages() { $('messages').replaceChildren(...conversation()); restoreChatScroll(); }
 function message(text, cls, id = active) { const node = el('div', text, { class: cls }); conversation(id).push(node); if (id === active) renderMessages(); return node; }
 async function activate(id) {
   const activation = await call('activate', id); adviceState = activation.advice; if (id !== active) { clearModal(); discardSelection(); attachment = null; $('question').value = ''; }
-  active = id; for (const [sid, s] of sessions) s.pane.hidden = sid !== active;
+  chatView().top = $('messages').scrollTop; active = id; for (const [sid, s] of sessions) s.pane.hidden = sid !== active;
   $('terminal-empty').hidden = id !== 'general'; $('terminals').hidden = id === 'general';
   $('target').textContent = id === 'general' ? 'No SSH session' : `${sessions.get(id).meta.username}@${sessions.get(id).meta.host}:${sessions.get(id).meta.port}`;
   $('ai-context').textContent = id === 'general' ? 'General conversation · no SSH target' : `Conversation linked to ${sessions.get(id).meta.name || sessions.get(id).meta.host}`;
@@ -229,7 +233,7 @@ function renderSharing() {
   const connected = sessions.get(active)?.meta.status === 'connected';
   $('preview-toggle').textContent = `전송 전 확인 ${previewEnabled ? 'ON' : 'OFF'}`; $('preview-toggle').setAttribute('aria-pressed', String(previewEnabled)); $('preview-toggle').title = 'AI로 보내기 전 질문·첨부·이전 대화의 내용을 확인합니다. 화면 공유 기능이 아닙니다.';
   $('send-message').textContent = previewEnabled ? '내용 확인 →' : '전송 ↵'; $('send-message').setAttribute('aria-label', previewEnabled ? 'Preview message' : 'Send message');
-  $('send-message').disabled = pendingRequests.has(active) || directRequests.has(active);
+  $('send-message').disabled = delegationState.enabled || pendingRequests.has(active) || directRequests.has(active);
   $('send-hint').textContent = previewEnabled ? 'Enter: 전송 내용 확인 · Shift+Enter: 줄바꿈' : 'Enter: 바로 전송 · Shift+Enter: 줄바꿈';
   $('advice-toggle').textContent = `AI 터미널 공유 ${adviceState.enabled ? 'ON · 중지' : 'OFF'}`; $('advice-toggle').setAttribute('aria-pressed', String(adviceState.enabled));
   $('advice-toggle').disabled = !adviceState.enabled && (!connected || !auth.activeAccountId || !models.length);
@@ -237,11 +241,20 @@ function renderSharing() {
   $('advice-status').hidden = !adviceState.enabled && !adviceState.reason;
   const reason = { stopped: '사용자가 중지했습니다.', cancelled: '응답을 취소했습니다.', 'tab-changed': '다른 탭으로 이동했습니다.', 'tab-closed': '세션 탭을 닫았습니다.', 'model-changed': '모델이 바뀌었습니다.', 'account-changed': '계정 또는 인증 상태가 바뀌었습니다.', 'connection-changed': 'SSH 연결이 바뀌거나 끊겼습니다.', 'context-changed': '공유 대상이 바뀌었습니다.', 'conversation-reset': '새 대화를 시작했습니다.', 'request-failed': 'AI 요청이 실패했습니다. 다시 켜기 전 연결과 사용 한도를 확인하세요.', 'renderer-restarted': '화면이 다시 시작됐습니다.' }[adviceState.reason] || '다시 켜려면 공유 범위를 확인하세요.';
   $('advice-status').textContent = adviceState.enabled ? '새 SSH 출력 자동 공유 중 · 횟수 제한 없음' : `자동 공유 중지 · ${reason}${adviceState.error ? ` ${errorText(adviceState.error)}` : ''}`;
-  $('sharing-privacy').textContent = adviceState.enabled ? '현재 SSH 출력과 이 대화의 이전 내용만 공유합니다. 화면 캡처는 공유하지 않습니다.' : '질문·직접 첨부·이전 대화를 전송합니다. 화면 캡처는 공유하지 않습니다.';
+  $('sharing-privacy').textContent = delegationState.enabled ? '위임 목표와 실행 명령·결과를 AI에 공유합니다. 화면 캡처는 공유하지 않습니다.' : adviceState.enabled ? '현재 SSH 출력과 이 대화의 이전 내용만 공유합니다. 화면 캡처는 공유하지 않습니다.' : '질문·직접 첨부·이전 대화를 전송합니다. 화면 캡처는 공유하지 않습니다.';
+  $('delegation-toggle').textContent = delegationState.enabled ? '위임 ON · 중지' : '위임 OFF'; $('delegation-toggle').setAttribute('aria-pressed', String(delegationState.enabled));
+  $('delegation-toggle').disabled = !delegationState.enabled && (!connected || !auth.activeAccountId || !models.length || pendingRequests.has(active));
+  $('delegation-status').hidden = !delegationState.enabled && !delegationState.reason;
+  const ended = { completed: '목표 완료', 'needs-input': '추가 입력 필요', stopped: '사용자가 중지함', 'step-limit': '30단계에 도달해 중지', 'time-limit': '30분에 도달해 중지', 'result-unknown': '실행 결과가 불확실하여 중지' }[delegationState.reason] || delegationState.reason;
+  $('delegation-status').textContent = delegationState.enabled ? `위임 진행 · ${delegationState.phase} · 목표: ${delegationState.goal.slice(0, 160)}` : `위임 종료 · ${ended}`;
+  $('advice-toggle').disabled ||= delegationState.enabled;
+  $('preview-toggle').disabled = delegationState.enabled;
   $('terminal-paste').disabled = !connected;
   $('terminal-clear').disabled = !sessions.has(active);
 }
 async function submitMessage() {
+  if (!$('question').value.trim()) { bottomOfChat(); return; }
+  if (delegationState.enabled) return notice('위임 중에는 목표를 바꾸지 않습니다. 위임을 중지한 뒤 새 목표를 입력해 주세요.');
   if (pendingRequests.has(active) || directRequests.has(active)) return;
   if (previewEnabled) return previewMessage();
   if (!auth.activeAccountId || !models.length) return notice('Sign in and select an authorized AI model first.');
@@ -262,6 +275,21 @@ async function toggleAdvice() {
   const enable = button('동의하고 켜기', async () => { enable.disabled = true; try { adviceState = await call('adviceEnable', prepared.token); modalCancel = null; clearModal(); renderSharing(); } catch (e) { clearModal(); notice('공유 동의가 만료되었거나 대상이 바뀌었습니다. AI 자동 조언 버튼에서 다시 확인해 주세요.'); } }, 'mint'); enable.disabled = true; consent.onchange = () => { enable.disabled = !consent.checked; };
   actions(body, [button('Cancel', clearModal), enable]);
 }
+async function toggleDelegation() {
+  if (delegationState.enabled) { delegationState = await call('delegationStop'); renderSharing(); return; }
+  const id = active, model = $('model').value;
+  const body = modal('서버 작업 위임');
+  body.append(el('p', '설치하거나 변경할 내용을 구체적으로 입력하세요. AI가 서버 상태를 확인하고 작업과 검증을 순서대로 진행합니다.'));
+  const goal = field(body, '위임할 작업 목표', 'delegation-goal', 'text', $('question').value);
+  actions(body, [button('Cancel', clearModal), button('위임 내용 확인', async () => {
+    const prepared = await call('delegationPrepare', { sessionId: id, model, goal: goal.value });
+    const review = modal('위임 범위 확인', () => call('delegationStop'));
+    review.append(el('p', `서버: ${prepared.target.username}@${prepared.target.host}:${prepared.target.port}\n작업 목표: ${prepared.goal}`), el('div', prepared.target.fingerprint, { class: 'fingerprint' }), el('p', '이 목표를 위한 설치·설정 변경 명령을 매번 승인하지 않고 AI가 실행합니다. 현재 SSH 계정의 권한으로 서버가 변경됩니다. 실행 명령·출력·종료 상태를 표시하고 AI에 공유합니다. 최대 30단계·30분이며 완료하면 위임이 꺼집니다. 저장소 추가·비밀번호 입력·데이터 삭제 등 추가 판단이 필요하면 멈추고 질문합니다.'), el('p', '위임 중지 또는 탭·계정·모델·연결 변경 시 추가 실행을 중단하고 실행 중 명령에는 중지 신호를 보냅니다. 이미 적용한 변경은 자동으로 되돌리지 않습니다.'));
+    const consent = field(review, '이 서버에서 위 목표의 설치·설정 변경을 AI에 위임합니다', 'delegation-consent', 'checkbox');
+    const start = button('동의하고 위임 시작', async () => { start.disabled = true; delegationState = await call('delegationStart', prepared.token); $('question').value = ''; modalCancel = null; clearModal(); renderSharing(); }, 'mint');
+    start.disabled = true; consent.onchange = () => { start.disabled = !consent.checked; }; actions(review, [button('Cancel', clearModal), start]);
+  }, 'mint')]);
+}
 async function showExecution(command) {
   if (active === 'general') return notice('Connect and select an SSH session to review execution.');
   const e = await call('execution', { id: active, command });
@@ -269,7 +297,8 @@ async function showExecution(command) {
   body.append(el('p', `Trusted SSH target: ${e.target.username}@${e.target.host}:${e.target.port}\nSession ${e.sessionId}\nGeneration ${e.generation}`), el('div', e.target.fingerprint, { class: 'fingerprint' }), el('pre', e.command), el('p', 'Separate SSH exec channel. Server default login environment. Does not inherit the terminal directory or environment. Current directory, shell and effective privileges are unknown.'), el('p', `Risks: ${e.policy.risks.join(', ') || 'Remote executables and startup configuration can have side effects.'}`, { class: 'danger' }));
   body.append(el('p', '명령 이름에 따른 허용 목록 제한은 없습니다. 승인하면 표시된 명령을 그대로 한 번 실행합니다. 입력이 필요한 프로그램은 터미널에 넣어 사용하세요.'));
   if (!e.policy.allowed) body.append(el('p', '명령에 숨겨진 제어 문자가 있거나 길이가 올바르지 않아 실행할 수 없습니다. 명령을 다시 입력해 주세요.', { class: 'modal-error' }));
-  const approve = button('Approve & run once', async () => { approve.disabled = true; await call('approve', e.token); modalCancel = null; clearModal(); }, 'mint'); approve.disabled = !e.token;
+  const follow = field(body, '실행 결과를 AI에 보내고 다음 작업 제안 받기', 'execution-followup', 'checkbox'); follow.checked = !!auth.activeAccountId && !!models.length; follow.disabled = !auth.activeAccountId || !models.length;
+  const approve = button('Approve & run once', async () => { approve.disabled = true; await call('approve', { token: e.token, followUp: follow.checked }); modalCancel = null; clearModal(); }, 'mint'); approve.disabled = !e.token;
   actions(body, [button('Cancel', clearModal), button('터미널에 넣기', async () => { await call('cancelExecution', e.id); modalCancel = null; clearModal(); await insertCommand(e.command, e.sessionId); }), approve]);
 }
 function commandCard(card, id) { const node = el('section', null, { class: 'suggestion' }); const heading = el('div', 'Suggested command', { class: 'suggestion-title' }); heading.prepend(icon('cutout-88-adea854f6b8d.png')); node.append(heading, el('code', card.command, { class: 'command' })); const row = el('div', null, { class: 'actions' }); row.append(button('Copy', () => call('copy', card.command)), button('Review & run', () => { if (active !== id) return notice('Select the source SSH tab first.'); return showExecution(card.command); }, 'mint'), button('터미널에 넣기', () => insertCommand(card.command, id))); const note = el('p', 'Separate approval required. No safety guarantee.', { class: 'approval-note' }); note.prepend(icon('cutout-93-eb28c1dfa39f.png')); node.append(row, note); conversation(id).push(node); }
@@ -379,8 +408,10 @@ window.keyshell.subscribe(safe(async ({ type, detail }) => {
   else if (type === 'auth-error') { if (detail.code === 'E-AUTH-CANCELLED') return; loginPending = false; loginError = errorText(detail.code); $('cancel-login').hidden = true; renderSettingsAuth(); notice(detail.code); }
   else if (type === 'terminal-paste') { await presentPaste(detail.sessionId, detail.preview); }
   else if (type === 'clipboard-error') { notice(detail.code); }
+  else if (type === 'delegation') { delegationState = detail; renderSharing(); }
+  else if (type === 'automation-notice') { message(detail.text, 'answer', detail.sessionId); }
   else if (type === 'advice') { adviceState = detail; renderSharing(); }
-  else if (type === 'manual-question' || type === 'automatic-question') {
+  else if (type === 'manual-question' || type === 'automatic-question' || type === 'result-question') {
     if (detail.historyTrimmed) message('오래된 AI 맥락을 정리하고 최근 대화와 새 SSH 출력을 기준으로 안내합니다. 화면의 이전 메시지는 그대로 남습니다.', 'request-status', detail.sessionId);
     message(`${type === 'automatic-question' ? '자동 조언 요청\n' : ''}${detail.text}`, 'question', detail.sessionId);
   }
@@ -388,8 +419,8 @@ window.keyshell.subscribe(safe(async ({ type, detail }) => {
     const id = detail.sessionId || active;
     if (detail.type === 'queued' || detail.type === 'sending') { pendingRequests.add(id); $('cancel-ai').hidden = !pendingRequests.has(active); }
     else if (detail.type === 'cancelled') { pendingRequests.delete(id); $('cancel-ai').hidden = !pendingRequests.has(active); const n = conversation(id).find(n => n.dataset.request === detail.requestId); if (n) n.append(el('p', '응답이 중지되었습니다. 자동 재전송하지 않습니다.', { class: 'sub' })); else { const status = message('응답이 중지되었습니다. 자동 재전송하지 않습니다.', 'request-status', id); status.dataset.request = detail.requestId; } }
-    else if (detail.type === 'delta') { const log = conversation(id); let n = log.find(n => n.dataset.request === detail.requestId); if (!n) { n = message('', 'answer', id); n.dataset.request = detail.requestId; } n.textContent += detail.text; if (active === id) $('messages').scrollTop = $('messages').scrollHeight; }
-    else if (detail.type === 'completed') { for (const card of detail.commands) commandCard(card, id); if (active === id) renderMessages(); pendingRequests.delete(id); $('cancel-ai').hidden = !pendingRequests.has(active); }
+    else if (detail.type === 'delta' && detail.mode !== 'delegation') { const log = conversation(id); let n = log.find(n => n.dataset.request === detail.requestId); if (!n) { n = message('', 'answer', id); n.dataset.request = detail.requestId; } n.textContent += detail.text; if (active === id) restoreChatScroll(); }
+    else if (detail.type === 'completed') { if (detail.mode !== 'delegation') for (const card of detail.commands) commandCard(card, id); if (active === id) renderMessages(); pendingRequests.delete(id); $('cancel-ai').hidden = !pendingRequests.has(active); }
     else if (detail.type === 'error') { message(`${errorText(detail.error.code)} · ${detail.error.transmission}. No automatic retry.`, 'answer', id); pendingRequests.delete(id); $('cancel-ai').hidden = !pendingRequests.has(active); }
     else if (detail.type === 'reset') { pendingRequests.clear(); $('cancel-ai').hidden = true; conversations.clear(); renderMessages(); }
     renderSharing();
@@ -412,6 +443,9 @@ $('question').addEventListener('compositionstart', () => { composing = true; });
 $('question').onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !composing && event.keyCode !== 229) { event.preventDefault(); if (!event.repeat) submitMessage().catch(notice); } };
 $('preview-toggle').onclick = safe(async () => { const result = await call('previewMode', !previewEnabled); previewEnabled = result.previewEnabled; renderSharing(); });
 $('advice-toggle').onclick = safe(toggleAdvice);
+$('delegation-toggle').onclick = safe(toggleDelegation);
+$('messages').addEventListener('scroll', () => { const node = $('messages'), view = chatView(); view.top = node.scrollTop; view.follow = node.scrollHeight - node.clientHeight - node.scrollTop < 32; });
+$('messages').addEventListener('wheel', event => { if (event.deltaY < 0) chatView().follow = false; }, { passive: true });
 $('question').oninput = safe(() => call('invalidate'));
 $('login').onclick = safe(() => login()); $('add-account').onclick = safe(() => login(false, true));
 $('cancel-login').onclick = safe(cancelLogin);
@@ -421,5 +455,5 @@ $('model').onchange = safe(() => call('model', { id: active, model: $('model').v
 $('new-chat').onclick = safe(async () => { await call('reset', active); pendingRequests.delete(active); $('cancel-ai').hidden = true; conversations.delete(active); attachment = null; renderMessages(); renderAttachment(); });
 $('cancel-ai').onclick = safe(async () => { await call('cancelAI', active); pendingRequests.delete(active); $('cancel-ai').hidden = true; notice('AI request cancelled. A transmitted request may have reached the service.'); });
 setInterval(() => { const s = sessions.get(active); $('elapsed').textContent = s ? `${s.meta.status} · ${Math.floor((Date.now() - s.since) / 60000)}m · latency not measured` : 'No active session'; }, 1000);
-async function start() { const state = await call('state'); previewEnabled = state.previewEnabled; adviceState = state.advice; profiles = state.profiles; settings.version = state.version; settings.packaged = state.packaged; renderProfiles(); for (const meta of state.sessions) ensureSession(meta); await renderAuth(state.auth); await activate('general'); if (state.recovery) { $('recovery').textContent = state.recovery.message; $('recovery').hidden = false; } for (const e of state.executions || []) { const s = sessions.get(e.sessionId); if (s) executionNode(s, `${e.id}-status`).textContent = `${e.command}\nExecution: ${e.status}${Number.isInteger(e.exitCode) ? ` · exit ${e.exitCode}` : ''}\nPrevious output was not recovered after renderer restart.`; } }
+async function start() { const state = await call('state'); previewEnabled = state.previewEnabled; adviceState = state.advice; delegationState = state.delegation; profiles = state.profiles; settings.version = state.version; settings.packaged = state.packaged; renderProfiles(); for (const meta of state.sessions) ensureSession(meta); await renderAuth(state.auth); await activate('general'); if (state.recovery) { $('recovery').textContent = state.recovery.message; $('recovery').hidden = false; } for (const e of state.executions || []) { const s = sessions.get(e.sessionId); if (s) executionNode(s, `${e.id}-status`).textContent = `${e.command}\nExecution: ${e.status}${Number.isInteger(e.exitCode) ? ` · exit ${e.exitCode}` : ''}\nPrevious output was not recovered after renderer restart.`; } }
 start().catch(notice);

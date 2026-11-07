@@ -357,10 +357,65 @@ test('terminal clipboard and reviewed commands: real OS paste shortcuts, right c
     await page.getByLabel('Ask about this session').fill('PHP 버전을 확인해줘'); await page.getByLabel('Ask about this session').press('Enter'); await page.getByRole('button', { name: 'Review & run', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Review & run', exact: true }).click(); const approve = page.getByRole('button', { name: 'Approve & run once', exact: true }); assert.equal(await approve.isEnabled(), true); assert.ok(!(await page.locator('#modal-body').textContent()).includes('Execution blocked')); await approve.click();
     await page.waitForFunction(() => /PHP 8.5.0/.test(document.getElementById('executions').textContent) && /completed/.test(document.getElementById('executions').textContent)); assert.deepEqual(commands, ['php-fpm8.5 -v']);
-    await page.getByRole('button', { name: '터미널에 넣기', exact: true }).click(); expected += 'php-fpm8.5 -v'; await waitInput(expected); assert.deepEqual(commands, ['php-fpm8.5 -v']);
+    await page.getByRole('button', { name: '터미널에 넣기', exact: true }).first().click(); expected += 'php-fpm8.5 -v'; await waitInput(expected); assert.deepEqual(commands, ['php-fpm8.5 -v']);
     await page.locator('#terminal-font-up').click(); await page.locator('#settings').click(); assert.equal(await page.getByLabel('글자 크기 (8–32px)', { exact: true }).inputValue(), '14');
     await page.getByLabel('스크롤 기록 줄 수 (1,000–50,000)', { exact: true }).fill('5000'); await page.getByRole('button', { name: '터미널 설정 적용', exact: true }).click(); await page.getByRole('button', { name: 'Done', exact: true }).click();
     await page.locator('#terminal-clear').click(); assert.deepEqual(commands, ['php-fpm8.5 -v']);
     await page.screenshot({ path: path.resolve('docs/verification/desktop/php-command-paste.png') }); assert.deepEqual(errors, []);
+  } finally { for (const client of clients) { client.end(); client._sock?.destroy(); } if (app) { await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); }).catch(() => {}); await app.close().catch(() => {}); } await new Promise(resolve => server.close(resolve)); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('delegation and chat scroll: held reading position, empty Enter, result follow-up and delegated SSH steps', { timeout: 120000 }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'keyshell-delegation-')), clients = new Set(), commands = [];
+  const key = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs1', format: 'pem' }); let app, held;
+  const server = new Server({ hostKeys: [key] }, client => {
+    clients.add(client); client.on('close', () => clients.delete(client)); client.on('error', () => {});
+    client.on('authentication', ctx => ctx.method === 'password' ? ctx.accept() : ctx.reject());
+    client.on('ready', () => client.on('session', accept => {
+      const session = accept(); session.on('pty', accept => accept()); session.on('window-change', accept => accept?.());
+      session.on('signal', accept => { accept?.(); held?.exit(130); held?.end(); });
+      session.on('shell', accept => { const stream = accept(); stream.on('error', () => {}); stream.write('READY\r\n'); });
+      session.on('exec', (accept, _reject, info) => { commands.push(info.command); const stream = accept(); stream.on('error', () => {}); if (info.command === 'sleep 99') { held = stream; return; } stream.write(info.command === 'cat /etc/os-release' ? 'Ubuntu fixture\n' : 'PHP 8.5 nginx 1.28 MariaDB 11 fixture\n'); stream.exit(0); stream.end(); });
+    }));
+  }); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1' } });
+    const page = await app.firstWindow(), errors = []; page.on('pageerror', e => errors.push(e.message)); await page.locator('#auth-state').filter({ hasText: 'DEVELOPMENT FIXTURE' }).waitFor();
+    await app.evaluate(({ app }, modulePath) => {
+      const { AIService } = process.mainModule.require(modulePath), original = AIService.prototype.preview;
+      app.__automationPayloads = []; app.__delegationSteps = [
+        { action: 'run', command: 'cat /etc/os-release', summary: '운영체제를 확인합니다' },
+        { action: 'run', command: 'nginx -v && php -v && mariadb --version', summary: '설치된 버전을 검증합니다' },
+        { action: 'done', command: '', summary: '서비스 버전 검증을 마쳤습니다' }
+      ];
+      AIService.prototype.preview = function(...args) {
+        if (!this.__automationFixture) { this.__automationFixture = true; this.fetch = async (_url, options) => {
+          const payload = JSON.parse(options.body); app.__automationPayloads.push(payload);
+          const delegated = payload.instructions.includes('user-delegated');
+          let text = delegated ? JSON.stringify(app.__delegationSteps.shift()) : payload.input.at(-1).content.includes('최종 실행 결과') ? 'PHP 결과를 확인했습니다. 다음은 nginx 설정 검사입니다.\n```sh\nnginx -t\n```' : Array.from({ length: 60 }, (_, i) => '읽을 내용 ' + i).join('\n');
+          return { ok: true, body: (async function* () {
+            const delta = value => Buffer.from('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: value }) + '\n\n');
+            yield delta(text);
+            if (app.__automationPayloads.length === 1) { await new Promise(resolve => { app.__continueChat = resolve; }); yield delta('\n추가 스트리밍 내용\n```sh\nphp -v\n```'); }
+            yield Buffer.from('data: {"type":"response.completed"}\n\n');
+          })() };
+        }; } return original.apply(this, args);
+      };
+    }, require.resolve('../src/main/ai-service.cjs'));
+    await page.locator('[data-new]').first().click(); await page.getByLabel('Connection name', { exact: true }).fill('Delegation SSH'); await page.getByLabel('Host', { exact: true }).fill('127.0.0.1'); await page.getByLabel('Port', { exact: true }).fill(String(server.address().port)); await page.getByLabel('Username', { exact: true }).fill('tester'); await page.getByLabel('Password', { exact: true }).fill('test-only'); await page.getByRole('button', { name: 'Connect', exact: true }).click(); await page.getByRole('button', { name: 'Trust & connect' }).click(); await page.locator('#connection-state').filter({ hasText: /^connected$/ }).waitFor();
+    const input = page.getByLabel('Ask about this session'); await input.fill('상태 확인'); await input.press('Enter'); await page.locator('#messages .answer').filter({ hasText: '읽을 내용 59' }).waitFor();
+    const box = await page.locator('#messages').boundingBox(); await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.wheel(0, -10000); await page.waitForFunction(() => document.getElementById('messages').scrollTop < 5);
+    await app.evaluate(({ app }) => app.__continueChat()); await page.getByRole('button', { name: 'Review & run', exact: true }).waitFor(); assert.ok(await page.locator('#messages').evaluate(n => n.scrollTop < 5));
+    await input.press('Enter'); await page.waitForFunction(() => { const n = document.getElementById('messages'); return n.scrollHeight - n.clientHeight - n.scrollTop < 5; });
+    const count = await app.evaluate(({ app }) => app.__automationPayloads.length); assert.equal(count, 1);
+    await page.getByRole('button', { name: 'Review & run', exact: true }).click(); assert.equal(await page.getByLabel('실행 결과를 AI에 보내고 다음 작업 제안 받기', { exact: true }).isChecked(), true); await page.getByRole('button', { name: 'Approve & run once', exact: true }).click();
+    await page.locator('#messages .answer').filter({ hasText: 'PHP 결과를 확인했습니다' }).waitFor(); assert.deepEqual(commands, ['php -v']);
+    let payloads = await app.evaluate(({ app }) => app.__automationPayloads); assert.match(JSON.stringify(payloads[1]), /PHP 8.5/); assert.match(JSON.stringify(payloads[1]), /completed/);
+    const begin = async goal => { await input.fill(goal); await page.locator('#delegation-toggle').click(); await page.getByRole('button', { name: '위임 내용 확인', exact: true }).click(); assert.deepEqual(commands.length, goal === 'nginx PHP MariaDB 설치 확인' ? 1 : 3); await page.getByLabel('이 서버에서 위 목표의 설치·설정 변경을 AI에 위임합니다', { exact: true }).check(); await page.getByRole('button', { name: '동의하고 위임 시작', exact: true }).click(); };
+    await begin('nginx PHP MariaDB 설치 확인'); await page.locator('#delegation-status').filter({ hasText: '목표 완료' }).waitFor(); assert.deepEqual(commands, ['php -v', 'cat /etc/os-release', 'nginx -v && php -v && mariadb --version']);
+    payloads = await app.evaluate(({ app }) => app.__automationPayloads); assert.match(JSON.stringify(payloads[3]), /Ubuntu fixture/); assert.match(JSON.stringify(payloads[4]), /MariaDB 11/); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'false');
+    await app.evaluate(({ app }) => { app.__delegationSteps = [{ action: 'run', summary: '중지 검사', command: 'sleep 99' }, { action: 'run', summary: '실행되면 안 됨', command: 'whoami' }]; });
+    await begin('대기 작업 검사'); await page.locator('#delegation-status').filter({ hasText: '명령 실행 중' }).waitFor(); await page.locator('#delegation-toggle').click(); await page.locator('#delegation-status').filter({ hasText: '사용자가 중지함' }).waitFor(); await page.waitForTimeout(150); assert.deepEqual(commands, ['php -v', 'cat /etc/os-release', 'nginx -v && php -v && mariadb --version', 'sleep 99']);
+    await page.screenshot({ path: path.resolve('docs/verification/desktop/delegation.png') }); assert.deepEqual(errors, []);
   } finally { for (const client of clients) { client.end(); client._sock?.destroy(); } if (app) { await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); }).catch(() => {}); await app.close().catch(() => {}); } await new Promise(resolve => server.close(resolve)); fs.rmSync(directory, { recursive: true, force: true }); }
 });
