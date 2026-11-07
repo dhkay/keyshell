@@ -1,6 +1,6 @@
 {
   "name": "keyshell",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "private": true,
   "description": "User-controlled SSH desktop application",
   "type": "commonjs",

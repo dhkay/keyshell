@@ -98,6 +98,32 @@ test('reboot-required status checks are not mistaken for reboot commands', async
   f.finish('Ubuntu 24.04 LTS'); await f.automation.running;
   assert.equal(f.automation.state().reason, 'completed');
 });
+test('AI authority uses Responses function tools and returns observed SSH output before the next decision', async t => {
+  const call = (name, args, id) => () => {
+    const item = { type: 'function_call', name, arguments: JSON.stringify(args), call_id: id, status: 'completed' };
+    return new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output: [item] } })}\n\n`);
+  };
+  const f = fixture(t, [
+    call('set_plan', { summary: 'OS 점검 계획', tasks: ['OS 확인', '상태 검증'] }, 'call_plan1'),
+    call('ssh_command', { summary: 'OS 확인', command: 'cat /etc/os-release', task: 1 }, 'call_exec1'),
+    call('ssh_command', { summary: '상태 검증', command: 'uname -r', task: 2 }, 'call_exec2'),
+    call('finish_task', { summary: 'OS와 커널 확인 완료', task: 2 }, 'call_done1')
+  ]);
+  f.automation.arm({ sessionId: 'first', model: 'model' });
+  f.automation.submit({ sessionId: 'first', model: 'model', goal: 'OS와 커널 점검' });
+  await tick(); assert.deepEqual(f.commands, ['cat /etc/os-release']);
+  assert.equal(f.calls[0].tools?.[0]?.name, 'set_plan');
+  assert.equal(f.calls[0].parallel_tool_calls, false);
+  assert.match(JSON.stringify(f.calls[1].input), /call_plan1/);
+  f.finish('Ubuntu 24.04 password=private 192.0.2.44'); await tick();
+  assert.deepEqual(f.commands, ['cat /etc/os-release', 'uname -r']);
+  const followUp = JSON.stringify(f.calls[2].input);
+  assert.match(followUp, /call_exec1/);
+  assert.match(followUp, /Ubuntu 24.04/);
+  assert.doesNotMatch(followUp, /private|192\.0\.2\.44/);
+  f.finish('6.8.0-generic'); await f.automation.running;
+  assert.equal(f.automation.state().reason, 'completed');
+});
 test('actual dangerous commands still need manual review', () => {
   for (const command of ['reboot', 'sudo reboot', 'if true; then reboot; fi', 'rm -rf /srv/database', 'sudo rm -rf /srv/database', 'mkfs.ext4 /dev/sdb', "bash -c 'reboot'", 'find /srv -name old -exec rm {} \\;', 'cat /var/log/a; shutdown -r now']) {
     assert.equal(needsManualReview(command), true, command);

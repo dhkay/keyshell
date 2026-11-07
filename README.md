@@ -52,7 +52,7 @@ SSH 세션에서 **AI 권한 OFF**이면 AI는 질문에 답하고 명령을 제
 
 ## 서버 작업 위임
 
-위임은 먼저 번호가 붙은 작업 목록을 만들고, 각 항목을 순서대로 진행합니다. 명령 실행 중에는 3초마다 앱 내부의 SSH 실행 상태를 확인하고, 확인된 종료 상태와 출력으로 다음 작업을 계획합니다. 상태 확인을 위해 실행 중인 터미널에 명령을 끼워 넣지 않습니다. 항목을 건너뛰거나 확인되지 않은 결과를 완료로 처리하지 않으며, 계획을 한 번 만든 뒤에는 다음 명령을 요청하며, 계획이나 형식이 잘못 반복되면 명령을 실행하지 않고 현재 작업만 일시 중지합니다. 같은 SSH 세션의 AI 권한 ON은 유지됩니다. 완료 후에는 짧은 결과를 채팅에 보고합니다.
+AI는 함수 도구로 작업 목록을 만들고 현재 SSH 터미널에 명령을 한 번에 하나씩 요청합니다. 각 명령의 종료 상태와 민감정보를 가린 출력을 모델에 돌려준 뒤 다음 단계를 결정합니다. 명령 실행 중에는 3초마다 앱 내부의 SSH 실행 상태를 확인하며 실행 중인 터미널에 확인 명령을 끼워 넣지 않습니다. 점검·설치·업데이트·취약점 검사·보안 패치 요청을 같은 채팅에서 이어서 처리할 수 있습니다. 항목을 건너뛰거나 확인되지 않은 결과를 완료로 처리하지 않고, 완료 후에는 짧은 결과를 보고합니다.
 
 
 
@@ -193,7 +193,7 @@ With **AI authority OFF**, the assistant answers questions and suggests commands
 
 ### Delegate an installation or configuration goal
 
-Delegation first creates an ordered task list. It runs one command at a time and checks the local SSH execution state every three seconds while a command is active. Once an exit is confirmed, the AI reads the observed output and chooses the next step. The app does not inject polling commands into the busy terminal. Tasks cannot be skipped, and completion requires a confirmed execution result; a short final report appears in chat. If an AI response repeats the plan or has an invalid format, the app requests a correction and pauses only the current task if that fails. Delegation remains ON in the same SSH session.
+AI authority uses Responses API function tools to create a plan, request one SSH command at a time, and read its confirmed exit status and locally redacted output before choosing the next step. It supports requested inspections, installations, updates, vulnerability checks, and security patches in the same chat. The app checks local execution state every three seconds without injecting polling commands into a busy terminal. Tasks cannot be skipped, and completion requires an observed result; a short final report appears in chat.
 
 
 
