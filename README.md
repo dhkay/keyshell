@@ -50,7 +50,7 @@ SSH 연결과 ChatGPT 로그인 후 **위임 OFF**를 눌러 켜고, 기존 채�
 
 ## 사람과 AI의 공유 터미널
 
-승인 실행과 위임 명령은 사람이 쓰는 **같은 SSH 터미널**에 `[AI]`로 표시하고, 결과와 종료 코드도 같은 화면에 출력합니다. 사람이 이동한 폴더·설정한 환경 변수를 AI가 이어 쓰고, AI가 바꾼 경로·환경도 다음 직접 입력에 유지됩니다. 별도 서버 에이전트 설치는 필요하지 않습니다.
+승인 실행과 위임 명령은 사람이 쓰는 **같은 SSH 터미널**에 `[AI]`로 표시하고, 결과와 종료 코드도 같은 화면에 출력합니다. 사람이 이동한 폴더·설정한 환경 변수를 AI가 이어 쓰고, AI가 바꾼 경로·환경도 다음 직접 입력에 유지됩니다. 별도 서버 에이전트 설치는 필요하지 않습니다. 명령은 현재 셸의 설정에 따라 서버의 셸 히스토리에 기록될 수 있습니다.
 
 - 셸이 새 프롬프트를 반환했는지 확인한 뒤 AI 명령을 보냅니다. 입력 중인 줄이나 실행 중인 프로그램에 명령을 끼워 넣지 않습니다. 출력을 잠시 멈춘 것을 완료로 간주하지 않습니다.
 - AI 실행 중에는 일반 입력·붙여넣기 충돌을 막습니다. **직접 조작** 또는 선택 영역이 없는 Ctrl+C로 AI를 멈추고 조작권을 가져올 수 있습니다. 실행이 끝났다고 확인하지 못하면 결과는 불확실로 기록합니다.
@@ -181,7 +181,7 @@ Review the SSH target, fingerprint, the goal you sent from chat, and authority t
 
 ### One terminal for you and the AI
 
-Reviewed and delegated commands use your existing SSH PTY. They are labelled `[AI]`; output and exit status appear in the same terminal, without a separate execution output panel. Directory and environment changes persist for both manual and AI commands.
+Reviewed and delegated commands use your existing SSH PTY. They are labelled `[AI]`; output and exit status appear in the same terminal, without a separate execution output panel. Directory and environment changes persist for both manual and AI commands. Commands may be recorded by the remote shell according to its history settings.
 
 - A confirmed shell prompt is required before AI input. Partial input and running foreground programs block AI execution; idle output is not proof of completion.
 - During AI execution, ordinary input and paste are blocked to avoid collisions. **직접 조작** (“Take control”) or Ctrl+C without a selection stops further AI steps and returns input control. An unconfirmed outcome is recorded as unknown.

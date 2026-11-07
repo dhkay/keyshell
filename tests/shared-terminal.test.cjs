@@ -26,9 +26,16 @@ test('shared protocol strips split markers and wrapper echo; completion waits fo
   const visible = f.output.map(o => o.data).join(''); assert.ok(!visible.includes('WRAPPER_ECHO')); assert.ok(!visible.includes(f.terminal.secret)); assert.match(f.output.filter(o => o.id === 'execution').map(o => o.data).join(''), /한글 result/);
 });
 test('manual input revokes readiness; takeover unlocks with unknown result and requires a fresh prompt', t => {
-  const f = protocol(t); f.terminal.manual(); assert.equal(f.terminal.start('one', 'whoami'), false); f.terminal.push(f.frame('P')); assert.equal(f.terminal.start('one', 'sleep 10'), true);
+  const f = protocol(t); f.terminal.manual('draft'); assert.equal(f.terminal.start('one', 'whoami'), false); f.terminal.manual('\r'); f.terminal.push(f.frame('P')); assert.equal(f.terminal.start('one', 'sleep 10'), true);
   f.terminal.takeControl(); assert.equal(f.results[0][1], 'unknown'); assert.equal(f.results[0][2].remoteTerminationConfirmed, false); assert.equal(f.terminal.owner, null); assert.equal(f.terminal.ready, false); assert.equal(f.writes.at(-1), '\x03');
   f.terminal.push('\x1eKS:wrong-secret:P\x1f'); assert.equal(f.terminal.ready, false); f.terminal.push(f.frame('P')); assert.equal(f.terminal.ready, true);
+});
+test('empty input does not revoke a confirmed prompt', t => { const f = protocol(t); f.terminal.manual(''); assert.equal(f.terminal.ready, true); });
+test('a prompt from the first pasted command cannot authorize AI over a trailing draft', t => {
+  const f = protocol(t); f.terminal.manual('echo first\rtrailing draft'); f.terminal.push(f.frame('P'));
+  assert.equal(f.terminal.ready, false); assert.equal(f.terminal.start('collision', 'whoami'), false);
+  f.terminal.manual('\r'); f.terminal.push(f.frame('P')); assert.equal(f.terminal.ready, true);
+  f.terminal.manual('first\rsecond\r'); f.terminal.push(f.frame('P')); assert.equal(f.terminal.ready, false); f.terminal.push(f.frame('P')); assert.equal(f.terminal.ready, true);
 });
 test('prompt after interruption has no invented zero exit code', t => {
   const f = protocol(t); f.terminal.start('one', 'sleep 10'); f.terminal.interrupt(); f.terminal.push(f.frame('P')); assert.equal(f.results[0][1], 'interrupted'); assert.equal(f.results[0][2].exitCode, null);
@@ -57,6 +64,7 @@ test('real shared SSH PTY preserves manual and AI context, blocks overlapping in
   await run(`cd '${directory}'; export KEYSHELL_SHARED_CONTEXT='kept from AI'`);
   const second = await run('pwd; printf "%s\\n" "$KEYSHELL_SHARED_CONTEXT"'); assert.match(observed.filter(d => d.executionId === second.id).map(d => d.data).join(''), /keyshell-shared-pty-[\s\S]*kept from AI/);
   const pending = service.prepareExecution(meta.sessionId, 'whoami'); service.write(meta.sessionId, 'echo human draft'); assert.throws(() => service.approveExecution(pending.token), { code: 'E-TERM-NOT-READY' }); service.write(meta.sessionId, '\x03'); await wait(ready);
+  service.write(meta.sessionId, 'echo first\rtrailing draft'); await new Promise(r => setTimeout(r, 80)); assert.equal(ready(), false); assert.throws(() => service.prepareExecution(meta.sessionId, 'whoami'), { code: 'E-TERM-NOT-READY' }); service.write(meta.sessionId, '\x03'); await wait(ready);
   const held = service.prepareExecution(meta.sessionId, 'sleep 10'); service.approveExecution(held.token); await new Promise(r => setTimeout(r, 100)); service.takeControl(meta.sessionId); assert.equal(service.executions.get(held.id).status, 'unknown'); assert.equal(service.listSessions()[0].terminalInputLocked, false); await wait(ready);
   assert.equal(shellCount, 1); assert.equal(execCount, 0); assert.ok(visible.every(d => d.channel === 'terminal')); assert.ok(!visible.some(d => d.data.includes('__KS_INIT_'))); assert.match(visible.map(d => d.data).join(''), /\[AI\]/);
   assert.ok(!observed.some(d => /\[AI(?: |\])/.test(d.data)), 'local execution labels are not remote output');

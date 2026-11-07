@@ -145,7 +145,7 @@ class SSHService extends EventEmitter {
   }
   _connected(id) { const s = this.sessions.get(id); if (!s || s.ended || s.status !== 'connected') fail('E-SSH-NOT-CONNECTED'); return s; }
   disconnect(id) { const s = this.sessions.get(id); if (!s) fail('E-SSH-SESSION'); if (!s.ended) { s.finish?.('disconnected'); } }
-  write(id, data) { const s = this._connected(id); if (typeof data !== 'string' || Buffer.byteLength(data) > LIMITS.input || data.includes('\0')) fail('E-TERM-INPUT'); if (s.shared?.owner) fail('E-TERM-AI-BUSY'); s.shared?.manual(); return { accepted: s.shell.write(data), multiline: /[\r\n]/.test(data), controlCharacters: /[\x00-\x08\x0b-\x1f\x7f]/.test(data) }; }
+  write(id, data) { const s = this._connected(id); if (typeof data !== 'string' || Buffer.byteLength(data) > LIMITS.input || data.includes('\0')) fail('E-TERM-INPUT'); if (s.shared?.owner) fail('E-TERM-AI-BUSY'); s.shared?.manual(data); return { accepted: s.shell.write(data), multiline: /[\r\n]/.test(data), controlCharacters: /[\x00-\x08\x0b-\x1f\x7f]/.test(data) }; }
   takeControl(id) { const s = this._connected(id); s.shared?.takeControl(); return { requested: true }; }
   resize(id, cols, rows) { const s = this._connected(id); if (![cols, rows].every(n => Number.isInteger(n) && n >= 1 && n <= 1000)) fail('E-TERM-SIZE'); s.shell.setWindow(rows, cols, 0, 0); }
   // Production requires consumption ACKs. Core consumers can keep synchronous delivery.

@@ -7,7 +7,7 @@ const quote = value => "'" + value.replace(/'/g, "'\\''") + "'";
 class SharedTerminal {
   constructor({ write, output, changed, finished, initTimeoutMs = 8000 }) {
     Object.assign(this, { write, output, changed, finished }); this.secret = randomBytes(24).toString('hex'); this.decoder = new StringDecoder('utf8');
-    this.ready = false; this.initializing = true; this.owner = null; this.frame = null; this.initial = '';
+    this.pendingPrompts = 0; this.dirtyInput = false; this.ready = false; this.initializing = true; this.owner = null; this.frame = null; this.initial = '';
     this.timer = setTimeout(() => { this.initializing = false; this.unsupported = true; this.flushInitial(); this.changed(); }, initTimeoutMs); this.timer.unref?.();
   }
   initialize() {
@@ -48,7 +48,7 @@ class SharedTerminal {
       if (this.initializing || this.unsupported) return;
       const owner = this.owner;
       // A prompt without a matching completion cannot prove an exit code.
-      this.owner = null; this.ready = true; this.changed();
+      this.owner = null; if (this.pendingPrompts > 0) this.pendingPrompts--; this.ready = this.pendingPrompts === 0 && !this.dirtyInput; this.changed();
       if (owner) this.output(`\r\n[AI ${Number.isInteger(owner.code) ? `exit ${owner.code}` : owner.cancelled ? 'interrupted' : 'result unknown'}]\r\n`, null, true);
       if (owner) this.finished(owner.id, Number.isInteger(owner.code) ? (owner.code === 0 ? 'completed' : 'failed') : owner.cancelled ? 'interrupted' : 'unknown', { exitCode: owner.code ?? null, remoteTerminationConfirmed: Number.isInteger(owner.code) || !!owner.cancelled });
       return;
@@ -65,9 +65,17 @@ class SharedTerminal {
     const start = `KS:${this.secret}:S:${nonce}`;
     this.write(` builtin printf '\\036${start}\\037'; builtin eval ${quote(command)}; __ks_finish_${this.secret} "$?" '${nonce}'\r`); return true;
   }
-  manual() { if (this.ready) { this.ready = false; this.changed(); } }
-  interrupt() { if (this.owner) this.owner.cancelled = true; this.write('\x03'); }
-  takeControl() { const owner = this.owner; this.owner = null; this.ready = false; if (owner) this.output('\r\n[AI control returned; execution result unknown]\r\n', null, true); this.write('\x03'); this.changed(); if (owner) this.finished(owner.id, 'unknown', { exitCode: null, remoteTerminationConfirmed: false, error: 'E-TERM-TAKEN-OVER' }); }
+  manual(data = '') {
+    if (!data) return;
+    for (const ch of data) {
+      if (ch === '\r' || ch === '\n') { this.pendingPrompts++; this.dirtyInput = false; }
+      else if (ch === '\x03') { this.pendingPrompts = 1; this.dirtyInput = false; }
+      else this.dirtyInput = true;
+    }
+    if (this.ready) { this.ready = false; this.changed(); }
+  }
+  interrupt() { this.pendingPrompts = 1; this.dirtyInput = false; if (this.owner) this.owner.cancelled = true; this.write('\x03'); }
+  takeControl() { this.pendingPrompts = 1; this.dirtyInput = false; const owner = this.owner; this.owner = null; this.ready = false; if (owner) this.output('\r\n[AI control returned; execution result unknown]\r\n', null, true); this.write('\x03'); this.changed(); if (owner) this.finished(owner.id, 'unknown', { exitCode: null, remoteTerminationConfirmed: false, error: 'E-TERM-TAKEN-OVER' }); }
   dispose() { clearTimeout(this.timer); this.owner = null; this.initial = ''; }
 }
 module.exports = { SharedTerminal, quote };
