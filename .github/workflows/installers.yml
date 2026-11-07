@@ -53,7 +53,14 @@ jobs:
       - run: npm run build
       - name: Electron 개발 런타임 준비
         if: runner.os != 'Linux'
-        run: npx electron --version
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if npx electron --version; then exit 0; fi
+            npm rebuild electron || true
+            sleep 5
+          done
+          exit 1
       - name: 설정 및 AI 공유 모드 화면 회귀 검증
         if: runner.os != 'Linux'
         run: node --test --test-name-pattern="settings reflect|AI sharing modes|terminal clipboard|delegation and chat scroll|shared terminal" tests/desktop.test.cjs
