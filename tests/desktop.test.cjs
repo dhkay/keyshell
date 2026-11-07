@@ -186,8 +186,9 @@ test('settings reflect ChatGPT sign-in progress, success, account and sign-out w
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'keyshell-settings-auth-'));
   let app;
   try {
-    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1', KEYSHELL_TEST_LOGIN_DELAY_MS: '500', KEYSHELL_TEST_LOGIN_FAIL_ONCE: '1' } });
+    app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1', KEYSHELL_TEST_LOGIN_HOLD: '1', KEYSHELL_TEST_LOGIN_FAIL_ONCE: '1' } });
     const page = await app.firstWindow();
+    const releaseLogin = () => app.evaluate((_electron, modulePath) => process.mainModule.require(modulePath).releaseLogin(), require.resolve('../src/main/test-fixture.cjs'));
     await page.locator('#auth-state').filter({ hasText: 'DEVELOPMENT FIXTURE' }).waitFor();
     await page.locator('#settings').click();
     await page.locator('#settings-auth-label').filter({ hasText: '연결됨' }).waitFor();
@@ -201,16 +202,18 @@ test('settings reflect ChatGPT sign-in progress, success, account and sign-out w
     await page.locator('#settings-auth-label').filter({ hasText: '로그인 중' }).waitFor();
     await page.locator('#settings-cancel-login').click();
     await page.locator('#settings-auth-label').filter({ hasText: '연결 안 됨' }).waitFor();
-    await page.waitForTimeout(650);
+    await releaseLogin();
     assert.equal(await page.locator('#settings-auth-status').getAttribute('data-state'), 'disconnected');
     await page.locator('#settings-sign-in').click();
     await page.locator('#settings-auth-label').filter({ hasText: '로그인 중' }).waitFor();
     assert.equal(await page.locator('#settings-sign-in').isDisabled(), true);
     assert.equal(await page.locator('#settings-cancel-login').isVisible(), true);
+    await releaseLogin();
     await page.locator('#settings-auth-label').filter({ hasText: '로그인 실패' }).waitFor();
     assert.equal(await page.locator('#settings-sign-in').isDisabled(), false);
     assert.equal(await page.locator('#settings-cancel-login').isVisible(), false);
     await page.locator('#settings-sign-in').click();
+    await releaseLogin();
     await page.locator('#settings-auth-label').filter({ hasText: '연결됨' }).waitFor();
     assert.equal(await page.locator('#modal').evaluate(n => n.open), true);
     assert.equal(await page.locator('#settings-cancel-login').isVisible(), false);
@@ -220,6 +223,7 @@ test('settings reflect ChatGPT sign-in progress, success, account and sign-out w
     assert.match(await page.locator('#settings-auth-detail').textContent(), /E-AUTH-REFRESH/);
     assert.equal(await page.locator('#settings-sign-in').isVisible(), true);
     await page.locator('#settings-sign-in').click();
+    await releaseLogin();
     await page.locator('#settings-auth-label').filter({ hasText: '연결됨' }).waitFor();
     assert.equal(await page.locator('#modal').evaluate(n => n.open), true);
     await page.getByRole('button', { name: 'Done', exact: true }).click();
