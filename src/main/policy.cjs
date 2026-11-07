@@ -40,7 +40,7 @@ function validateCredentials(c) {
   fail('E-SSH-AUTH-UNSUPPORTED');
 }
 // User review authorizes the exact command, not a fixed executable allow-list.
-// Risks are advisory; only malformed or hidden-control input is rejected.
+// Risks are advisory; malformed input, hidden controls and masked placeholders are rejected.
 function inspectCommand(command) {
   const reasons = [], risks = [];
   if (typeof command !== 'string' || !command.trim() || Buffer.byteLength(command) > LIMITS.command) reasons.push('invalid-size');

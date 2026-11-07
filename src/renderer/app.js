@@ -184,7 +184,7 @@ async function presentPaste(id, preview) {
   actions(body, [button('Cancel', clearModal), button('Paste into SSH', async () => { discardSelection(); await call('paste', preview.token); modalCancel = null; clearModal(); if (active === id) s.term.focus(); }, 'mint')]);
 }
 async function pasteClipboard(id = active) { return presentPaste(id, await call('clipboardPastePreview', id)); }
-async function insertCommand(command, id = active) { if (!sessions.has(id) || active !== id) return notice('명령을 넣을 SSH 세션을 먼저 선택해 주세요.'); return presentPaste(id, await call('pastePreview', { id, data: command })); }
+async function insertCommand(command, id = active) { if (command.includes('****')) return notice('가려진 값(****)이 포함된 명령은 넣을 수 없습니다. 실제 값이 필요하면 터미널에 직접 입력해 주세요.'); if (!sessions.has(id) || active !== id) return notice('명령을 넣을 SSH 세션을 먼저 선택해 주세요.'); return presentPaste(id, await call('pastePreview', { id, data: command })); }
 function fit() { const s = sessions.get(active); if (!s || s.pane.hidden) return; requestAnimationFrame(() => { try { s.addon.fit(); if (s.meta.status === 'connected') call('resize', { id: active, cols: s.term.cols, rows: s.term.rows }).catch(() => {}); } catch {} }); }
 new ResizeObserver(fit).observe($('terminals'));
 function executionBody(node) { return (node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement)?.closest('[data-execution-output]') || null; }
@@ -251,11 +251,11 @@ function renderSharing() {
   $('sharing-privacy').textContent = delegationState.enabled ? '위임 목표와 실행 명령·결과를 AI에 공유합니다. IP·비밀번호·인증키 등은 전송 전에 ****로 가립니다.' : adviceState.enabled ? '현재 SSH 출력과 이 대화의 이전 내용만 공유합니다. IP·비밀번호·인증키 등은 전송 전에 ****로 가립니다.' : '질문·직접 첨부·이전 대화를 전송합니다. IP·비밀번호·인증키 등은 전송 전에 ****로 가립니다.';
   $('delegation-toggle').textContent = delegationState.enabled ? '위임 ON · 중지' : delegationState.armed ? '위임 ON' : '위임 OFF'; $('delegation-toggle').setAttribute('aria-pressed', String(delegateMode));
   $('question').placeholder = delegateMode ? '이 서버에서 할 작업을 입력하세요…' : 'Ask about this session…';
-  $('delegation-toggle').disabled = !delegationState.enabled && (!connected || !auth.activeAccountId || !models.length || pendingRequests.has(active));
+  $('delegation-toggle').disabled = !delegateMode && (!connected || !auth.activeAccountId || !models.length || pendingRequests.has(active));
   $('delegation-status').hidden = !delegateMode && !delegationState.reason;
   const ended = { completed: '목표 완료', 'manual-takeover': '직접 조작으로 전환', 'needs-input': '추가 입력 필요', stopped: '사용자가 중지함', 'result-unknown': '실행 결과가 불확실하여 중지' }[delegationState.reason] || delegationState.reason;
   $('delegation-status').textContent = delegationState.enabled ? `위임 진행 · ${delegationState.phase} · 목표: ${delegationState.goal.slice(0, 160)}` : delegationState.armed ? `${delegationState.reason === 'completed' ? '목표 완료 · ' : ''}위임 ON` : `위임 종료 · ${ended}`;
-  $('advice-toggle').disabled ||= delegationState.enabled;
+  $('advice-toggle').disabled ||= delegateMode;
   $('preview-toggle').disabled = delegationState.enabled;
   const shared = sessions.get(active)?.meta;
   $('terminal-take-control').hidden = !shared?.terminalInputLocked;
@@ -307,7 +307,7 @@ async function showExecution(command) {
   const body = modal('Review command execution', () => call('cancelExecution', e.id));
   body.append(el('p', `Trusted SSH target: ${e.target.username}@${e.target.host}:${e.target.port}\nSession ${e.sessionId}\nGeneration ${e.generation}`), el('div', e.target.fingerprint, { class: 'fingerprint' }), el('pre', e.command), el('p', e.context.channel === 'shared-terminal' ? '현재 화면의 SSH 터미널에서 실행합니다. 현재 경로와 환경을 이어 사용하며, 명령과 결과를 같은 화면에서 볼 수 있습니다. AI 실행 중에는 입력 충돌을 막고 직접 조작으로 조작권을 가져올 수 있습니다.' : 'Separate SSH exec channel. Server default login environment. Does not inherit the terminal directory or environment. Current directory, shell and effective privileges are unknown.'), el('p', `Risks: ${e.policy.risks.join(', ') || 'Remote executables and startup configuration can have side effects.'}`, { class: 'danger' }));
   body.append(el('p', '명령 이름에 따른 허용 목록 제한은 없습니다. 승인하면 표시된 명령을 그대로 한 번 실행합니다. 입력이 필요한 프로그램은 터미널에 넣어 사용하세요.'));
-  if (!e.policy.allowed) body.append(el('p', '명령에 숨겨진 제어 문자가 있거나 길이가 올바르지 않아 실행할 수 없습니다. 명령을 다시 입력해 주세요.', { class: 'modal-error' }));
+  if (!e.policy.allowed) body.append(el('p', e.policy.reasons.includes('redacted-placeholder') ? '가려진 값(****)이 포함된 명령입니다. 실제 값을 복원하거나 실행하지 않습니다. 필요한 값은 터미널에서 직접 입력해 주세요.' : '명령에 숨겨진 제어 문자가 있거나 길이가 올바르지 않아 실행할 수 없습니다. 명령을 다시 입력해 주세요.', { class: 'modal-error' }));
   const follow = field(body, '실행 결과를 AI에 보내고 다음 작업 제안 받기', 'execution-followup', 'checkbox'); follow.checked = !!auth.activeAccountId && !!models.length; follow.disabled = !auth.activeAccountId || !models.length;
   const approve = button('Approve & run once', async () => { approve.disabled = true; await call('approve', { token: e.token, followUp: follow.checked }); modalCancel = null; clearModal(); }, 'mint'); approve.disabled = !e.token;
   actions(body, [button('Cancel', clearModal), button('터미널에 넣기', async () => { await call('cancelExecution', e.id); modalCancel = null; clearModal(); await insertCommand(e.command, e.sessionId); }), approve]);
