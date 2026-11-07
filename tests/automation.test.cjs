@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const { Automation, action } = require('../src/main/automation.cjs');
+const { Automation, action, needsManualReview } = require('../src/main/automation.cjs');
 const { AIService } = require('../src/main/ai-service.cjs');
 function fixture(t, responses, options = {}) {
   let active = 'first';
@@ -79,6 +79,32 @@ test('delegation continues beyond thirty steps and retains its goal and progress
 test('delegation refuses malformed action, hidden control and additional confirmation operations', async t => {
   for (const text of ['```json\n{}\n```', '{"action":"run","command":"whoami","summary":"ok","extra":true}', JSON.stringify({ action: 'run', command: 'whoami\r', summary: 'x' })]) assert.throws(() => action(text), { code: 'E-DELEGATION-RESPONSE' });
   const f = fixture(t, [{ action: 'run', summary: 'Delete', command: 'rm -rf /srv/database' }]); f.start(); await f.automation.running; assert.equal(f.automation.state().reason, 'needs-input'); assert.deepEqual(f.commands, []);
+});
+test('reboot-required status checks are not mistaken for reboot commands', async t => {
+  const check = "printf '\\n=== Reboot requirement ===\\n'; if [ -f /var/run/reboot-required ]; then cat /var/run/reboot-required; else printf 'No reboot-required marker\\n'; fi";
+  assert.equal(needsManualReview(check), false);
+  const f = fixture(t, [
+    { action: 'plan', summary: '상태 점검', command: '', tasks: ['재부팅 필요 여부 확인', '결과 확인'] },
+    { action: 'run', task: 1, summary: '상태 파일 확인', command: check },
+    { action: 'run', task: 2, summary: 'OS 확인', command: 'cat /etc/os-release' },
+    { action: 'done', task: 2, summary: '상태 점검 완료', command: '' }
+  ]);
+  f.automation.arm({ sessionId: 'first', model: 'model' });
+  f.automation.submit({ sessionId: 'first', model: 'model', goal: '서버 상태를 순서대로 점검해줘' });
+  await tick(); assert.deepEqual(f.commands, [check]);
+  f.finish('No reboot-required marker'); await tick();
+  assert.deepEqual(f.commands, [check, 'cat /etc/os-release']);
+  assert.match(JSON.stringify(f.calls[2]), /No reboot-required marker/);
+  f.finish('Ubuntu 24.04 LTS'); await f.automation.running;
+  assert.equal(f.automation.state().reason, 'completed');
+});
+test('actual dangerous commands still need manual review', () => {
+  for (const command of ['reboot', 'sudo reboot', 'if true; then reboot; fi', 'rm -rf /srv/database', 'sudo rm -rf /srv/database', 'mkfs.ext4 /dev/sdb', "bash -c 'reboot'", 'find /srv -name old -exec rm {} \\;', 'cat /var/log/a; shutdown -r now']) {
+    assert.equal(needsManualReview(command), true, command);
+  }
+  for (const command of ['cat /var/run/reboot-required', "printf 'No reboot-required marker\\n'", "grep 'reboot' /var/log/syslog", 'cat /etc/os-release; uname -r']) {
+    assert.equal(needsManualReview(command), false, command);
+  }
 });
 test('delegation cannot report completion without an observed successful execution', async t => {
   const f = fixture(t, [{ action: 'done', summary: '완료 주장', command: '' }]); f.start(); await f.automation.running; assert.equal(f.automation.state().reason, 'needs-input'); assert.deepEqual(f.commands, []);
