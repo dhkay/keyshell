@@ -386,9 +386,10 @@ test('delegation and chat scroll: held reading position, empty Enter, result fol
     await app.evaluate(({ app }, modulePath) => {
       const { AIService } = process.mainModule.require(modulePath), original = AIService.prototype.preview;
       app.__automationPayloads = []; app.__delegationSteps = [
+        { action: 'plan', summary: '작업 순서', command: '', tasks: ['OS 확인', '설치 상태 검증'] },
         { action: 'run', command: 'cat /etc/os-release', summary: '운영체제를 확인합니다' },
-        { action: 'run', command: 'nginx -v && php -v && mariadb --version', summary: '설치된 버전을 검증합니다' },
-        { action: 'done', command: '', summary: '서비스 버전 검증을 마쳤습니다' }
+        { action: 'run', task: 2, command: 'nginx -v && php -v && mariadb --version', summary: '설치된 버전을 검증합니다' },
+        { action: 'done', task: 2, command: '', summary: '서비스 버전 검증을 마쳤습니다' }
       ];
       AIService.prototype.preview = function(...args) {
         if (!this.__automationFixture) { this.__automationFixture = true; this.fetch = async (_url, options) => {
@@ -424,8 +425,8 @@ test('delegation and chat scroll: held reading position, empty Enter, result fol
       assert.equal(await page.locator('#modal').evaluate(n => n.open), false);
     };
     await begin('nginx PHP MariaDB 설치 확인'); await page.locator('#delegation-status').filter({ hasText: '목표 완료' }).waitFor(); assert.deepEqual(commands, ['php -v', 'cat /etc/os-release', 'nginx -v && php -v && mariadb --version']);
-    payloads = await app.evaluate(({ app }) => app.__automationPayloads); assert.match(JSON.stringify(payloads[3]), /Ubuntu fixture/); assert.match(JSON.stringify(payloads[4]), /MariaDB 11/); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'true');
-    await app.evaluate(({ app }) => { app.__delegationSteps = [{ action: 'run', summary: '중지 검사', command: 'sleep 99' }, { action: 'run', summary: '실행되면 안 됨', command: 'whoami' }]; });
+    payloads = await app.evaluate(({ app }) => app.__automationPayloads); assert.match(JSON.stringify(payloads[4]), /Ubuntu fixture/); assert.match(JSON.stringify(payloads[5]), /MariaDB 11/); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'true');
+    await app.evaluate(({ app }) => { app.__delegationSteps = [{ action: 'plan', summary: '작업 순서', command: '', tasks: ['대기 작업 확인'] }, { action: 'run', summary: '중지 검사', command: 'sleep 99' }, { action: 'run', summary: '실행되면 안 됨', command: 'whoami' }]; });
     await begin('대기 작업 검사'); await page.locator('#delegation-status').filter({ hasText: '명령 실행 중' }).waitFor(); await page.locator('#delegation-toggle').click(); await page.locator('#delegation-status').filter({ hasText: '사용자가 중지함' }).waitFor(); await page.waitForTimeout(150); assert.deepEqual(commands, ['php -v', 'cat /etc/os-release', 'nginx -v && php -v && mariadb --version', 'sleep 99']);
     await page.locator('#delegation-toggle').click(); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'true');
     await page.locator('#model').selectOption('fixture-alternate'); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'false');
@@ -472,7 +473,7 @@ test('shared terminal: manual and AI use one visible PTY, preserve context and a
     app = await electron.launch({ args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), '.'], env: { ...process.env, KEYSHELL_TEST_LEGACY_EXEC: '0', KEYSHELL_TEST_USER_DATA: directory, KEYSHELL_TEST_AI: '1' } });
     const page = await app.firstWindow(), errors = []; page.on('pageerror', e => errors.push(e.message)); await page.locator('#auth-state').filter({ hasText: 'DEVELOPMENT FIXTURE' }).waitFor();
     await app.evaluate(({ app }, modulePath) => {
-      const { AIService } = process.mainModule.require(modulePath), original = AIService.prototype.preview; app.__sharedPayloads = []; app.__sharedSteps = [ { action: 'run', summary: '현재 경로 확인', command: 'pwd' }, { action: 'run', summary: '조작권 전환 확인', command: 'sleep 99' }, { action: 'run', summary: '실행되면 안 됨', command: 'whoami' } ];
+      const { AIService } = process.mainModule.require(modulePath), original = AIService.prototype.preview; app.__sharedPayloads = []; app.__sharedSteps = [ { action: 'plan', summary: '작업 순서', command: '', tasks: ['현재 경로', '대기 작업'] }, { action: 'run', summary: '현재 경로 확인', command: 'pwd' }, { action: 'run', task: 2, summary: '조작권 전환 확인', command: 'sleep 99' }, { action: 'run', summary: '실행되면 안 됨', command: 'whoami' } ];
       AIService.prototype.preview = function(...args) { if (!this.__sharedFixture) { this.__sharedFixture = true; this.fetch = async (_url, options) => { const payload = JSON.parse(options.body); app.__sharedPayloads.push(payload); if (app.__sharedHoldNext && payload.instructions.includes('user-delegated')) { app.__sharedHoldNext = false; app.__sharedPlanningEntered?.(); return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => { app.__sharedPlanningCancelled = true; reject(new Error('cancelled fixture')); }, { once: true })); } const text = payload.instructions.includes('user-delegated') ? JSON.stringify(app.__sharedSteps.shift()) : payload.input.at(-1).content.includes('최종 실행 결과') ? '공유 터미널의 결과를 확인했습니다.' : '```sh\npwd\n```'; return { ok: true, body: (async function* () { yield Buffer.from('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: text }) + '\n\ndata: {"type":"response.completed"}\n\n'); })() }; }; } return original.apply(this, args); };
     }, require.resolve('../src/main/ai-service.cjs'));
     await page.locator('[data-new]').first().click(); await page.getByLabel('Connection name', { exact: true }).fill('Shared PTY'); await page.getByLabel('Host', { exact: true }).fill('127.0.0.1'); await page.getByLabel('Port', { exact: true }).fill(String(server.address().port)); await page.getByLabel('Username', { exact: true }).fill('tester'); await page.getByLabel('Password', { exact: true }).fill('test-only'); await page.getByRole('button', { name: 'Connect', exact: true }).click(); await page.getByRole('button', { name: 'Trust & connect' }).click();

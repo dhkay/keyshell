@@ -89,13 +89,13 @@ test('manual approval opt-out and cancelled follow-up never transmit results', a
 });
 
 test('one ON action arms the current server for multiple goals, with no per-goal consent', async t => {
-  const f = fixture(t, [{ action: 'ask', summary: '필요한 버전을 알려주세요', command: '' }, { action: 'ask', summary: '다음 작업 확인', command: '' }]);
+  const f = fixture(t, [{ action: 'plan', summary: '작업 순서', command: '', tasks: ['버전 확인'] }, { action: 'ask', summary: '필요한 버전을 알려주세요', command: '' }, { action: 'plan', summary: '작업 순서', command: '', tasks: ['다음 확인'] }, { action: 'ask', summary: '다음 작업 확인', command: '' }]);
   const notices = []; f.automation.on('notice', n => notices.push(n.text));
   const input = { sessionId: 'first', model: 'model', goal: 'Install nginx' };
   assert.throws(() => f.automation.submit(input), { code: 'E-DELEGATION-NOT-ARMED' });
   f.automation.arm(input); f.automation.arm(input); assert.equal(f.calls.length, 0); assert.equal(notices.length, 1);
   f.automation.submit(input); await f.automation.running; assert.equal(f.automation.state().armed, true);
-  f.automation.submit({ ...input, goal: 'Version 1.28' }); await f.automation.running; assert.equal(f.calls.length, 2);
+  f.automation.submit({ ...input, goal: 'Version 1.28' }); await f.automation.running; assert.equal(f.calls.length, 4);
   assert.equal(notices.filter(n => n.startsWith('위임 ON')).length, 1);
   f.automation.stop(); assert.equal(f.automation.state().armed, false); assert.throws(() => f.automation.submit(input), { code: 'E-DELEGATION-NOT-ARMED' });
 });
@@ -105,6 +105,39 @@ test('idle delegation mode is revoked on account and connection changes', t => {
   f.ai.catalog = [{ slug: 'model' }]; f.automation.arm(input); f.target.generation = 'two'; f.ssh.emit('session', f.target); assert.equal(f.automation.state().armed, false);
 });
 test('masked command pauses delegation and never reaches the SSH shell', async t => {
-  const f = fixture(t, [{ action: 'run', summary: '연결', command: 'curl http://****/' }]); f.start(); await f.automation.running;
+  const f = fixture(t, [{ action: 'plan', summary: '연결 순서', command: '', tasks: ['연결'] }, { action: 'run', summary: '연결', command: 'curl http://****/' }]); f.start(); await f.automation.running;
   assert.deepEqual(f.commands, []); assert.equal(f.automation.state().reason, 'needs-input');
+});
+
+test('delegated plan displays ordered tasks, runs sequentially and reports concise completion', async t => {
+  const f = fixture(t, [
+    { action: 'plan', summary: '작업 순서', command: '', tasks: ['OS 확인', '서비스 버전 확인'] },
+    { action: 'run', task: 1, summary: 'OS를 확인합니다', command: 'cat /etc/os-release' },
+    { action: 'run', task: 2, summary: '버전을 확인합니다', command: 'nginx -v' },
+    { action: 'done', task: 2, summary: '두 항목을 확인했습니다', command: '' }
+  ]);
+  const notices = []; f.automation.on('notice', d => notices.push(d.text));
+  f.automation.arm({ sessionId: 'first', model: 'model' });
+  f.automation.submit({ sessionId: 'first', model: 'model', goal: '서버 점검' });
+  await tick(); assert.equal(f.commands.length, 1); assert.match(notices.join('\n'), /작업 목록\n1\. OS 확인\n2\. 서비스 버전 확인/);
+  assert.equal(f.automation.state().tasks[0].status, 'running');
+  f.finish('Ubuntu'); await tick(); assert.deepEqual(f.commands, ['cat /etc/os-release', 'nginx -v']);
+  assert.equal(f.automation.state().tasks[0].status, 'completed');
+  f.finish('nginx/1.28'); await f.automation.running;
+  assert.equal(f.automation.state().reason, 'completed');
+  assert.match(notices.at(-1), /^완료: 2개 작업 확인/);
+});
+test('an armed delegation must receive a plan before any command', async t => {
+  const f = fixture(t, [{ action: 'run', summary: '바로 실행', command: 'whoami' }]);
+  f.automation.arm({ sessionId: 'first', model: 'model' });
+  f.automation.submit({ sessionId: 'first', model: 'model', goal: '점검' });
+  await f.automation.running; assert.deepEqual(f.commands, []);
+  assert.equal(f.automation.state().reason, 'E-DELEGATION-PLAN-REQUIRED');
+});
+test('delegation polls local execution state every three seconds without sending another SSH command', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const f = fixture(t, [{ action: 'plan', summary: '순서', command: '', tasks: ['점검'] }, { action: 'run', task: 1, summary: '기다리는 점검', command: 'sleep 99' }, { action: 'done', task: 1, summary: '확인 완료', command: '' }]);
+  f.automation.arm({ sessionId: 'first', model: 'model' }); f.automation.submit({ sessionId: 'first', model: 'model', goal: '점검' }); await tick();
+  t.mock.timers.tick(3000); await tick(); assert.match(f.automation.state().phase, /3초 간격/); assert.deepEqual(f.commands, ['sleep 99']);
+  f.finish('finished'); await f.automation.running; assert.equal(f.automation.state().reason, 'completed');
 });

@@ -47,6 +47,10 @@ npm start
 
 ## 서버 작업 위임
 
+위임은 먼저 번호가 붙은 작업 목록을 만들고, 각 항목을 순서대로 진행합니다. 명령 실행 중에는 3초마다 앱 내부의 SSH 실행 상태를 확인하고, 확인된 종료 상태와 출력으로 다음 작업을 계획합니다. 상태 확인을 위해 실행 중인 터미널에 명령을 끼워 넣지 않습니다. 항목을 건너뛰거나 확인되지 않은 결과를 완료로 처리하지 않으며, 완료 후에는 짧은 결과를 채팅에 보고합니다.
+
+
+
 SSH 연결과 ChatGPT 로그인 후 **위임 OFF**를 눌러 켜고, 기존 채팅창에 작업 목표를 작성해 Enter로 보냅니다. 별도 목표 입력창은 없습니다. 예: `nginx, PHP 8.5, MariaDB 설치 후 버전과 서비스 상태를 확인해줘`. ON을 누르면 현재 서버의 위임이 활성화되고 안내를 한 번 표시합니다. 이후 채팅으로 보낸 목표는 별도 동의창 없이 실행합니다. 실행 명령·출력·종료 상태를 표시하고 결과를 받은 후 다음 작업을 결정합니다. 기존 일반 대화와 분리된 작업 맥락을 사용합니다. 목표가 완료되면 같은 서버에서 위임 ON을 유지하고 다음 목표를 기존 채팅창으로 받습니다. 위임 버튼으로 끄거나 탭·계정·모델·연결이 바뀌면 위임 모드가 해제됩니다.
 
 - AI는 OS와 기존 구성을 먼저 확인하고, 설치·설정 변경 및 검증을 순차적으로 요청합니다. 원격 명령은 현재 SSH 계정 권한으로 실행합니다. 비밀번호 입력이 필요한 설치는 수동 작업으로 전환합니다.
@@ -178,6 +182,10 @@ Select **실행 결과를 AI에 보내고 다음 작업 제안 받기** (“Send
 Approved commands run in the same interactive SSH PTY you use. Your current directory and environment are shared: a `cd` or `export` from either you or the AI remains available to subsequent commands. Command output, including merged stdout and stderr, is displayed in that terminal. For interactive installers and editors, use **터미널에 넣기** and work in the terminal directly. Inserting a single-line command does not press Enter.
 
 ### Delegate an installation or configuration goal
+
+Delegation first creates an ordered task list. It runs one command at a time and checks the local SSH execution state every three seconds while a command is active. Once an exit is confirmed, the AI reads the observed output and chooses the next step. The app does not inject polling commands into the busy terminal. Tasks cannot be skipped, and completion requires a confirmed execution result; a short final report appears in chat.
+
+
 
 Connect to SSH, sign in to ChatGPT, select a model, and click **위임 OFF** to turn delegation ON. Write the goal in the existing chat input and press Enter; there is no separate goal entry window. For example:
 
