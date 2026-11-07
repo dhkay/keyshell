@@ -493,11 +493,11 @@ test('shared terminal: manual and AI use one visible PTY, preserve context and a
     assert.equal(await page.evaluate(async id => { try { await window.keyshell.call('write', { id, data: 'overlap' }); return false; } catch { return true; } }, id), true);
     assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'true');
     assert.equal(await page.locator('#terminal-take-control').isVisible(), true);
-    await page.locator('#terminal-take-control').click(); await ready(); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'false'); assert.equal(await page.locator('#terminal-take-control').isVisible(), false);
+    await page.locator('#terminal-take-control').click(); await ready(); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'true'); assert.equal(await page.locator('#terminal-take-control').isVisible(), false);
     await app.evaluate(({ app }) => { app.__sharedHoldNext = true; app.__sharedPlanningReady = new Promise(resolve => { app.__sharedPlanningEntered = resolve; }); });
-    await page.locator('#delegation-toggle').click(); await question.fill('다음 점검을 계획해줘'); await question.press('Enter'); await page.locator('#cancel-ai').waitFor(); await app.evaluate(({ app }) => app.__sharedPlanningReady);
+    await question.fill('다음 점검을 계획해줘'); await question.press('Enter'); await page.locator('#cancel-ai').waitFor(); await app.evaluate(({ app }) => app.__sharedPlanningReady);
     await page.evaluate(id => window.keyshell.call('write', { id, data: '' }), id); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'true');
-    await terminal.focus(); await page.keyboard.type('echo manual'); await page.keyboard.press('Enter'); await ready(); await page.waitForFunction(() => document.getElementById('delegation-toggle').getAttribute('aria-pressed') === 'false');
+    await terminal.focus(); await page.keyboard.type('echo manual'); await page.keyboard.press('Enter'); await ready(); await page.waitForFunction(() => document.getElementById('delegation-status').textContent.includes('직접 조작 중')); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'true');
     assert.equal(await app.evaluate(({ app }) => app.__sharedPlanningCancelled), true);
     assert.ok(!commands.includes('whoami')); assert.equal(execs, 0); assert.equal(shells, 1); assert.equal(held, null);
     assert.equal(await page.locator('#executions').isVisible(), false); assert.deepEqual(errors, []); await page.screenshot({ path: path.resolve('docs/verification/desktop/shared-terminal.png') });

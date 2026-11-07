@@ -132,7 +132,7 @@ test('an armed delegation must receive a plan before any command', async t => {
   f.automation.arm({ sessionId: 'first', model: 'model' });
   f.automation.submit({ sessionId: 'first', model: 'model', goal: '점검' });
   await f.automation.running; assert.deepEqual(f.commands, []);
-  assert.equal(f.automation.state().reason, 'E-DELEGATION-PLAN-REQUIRED');
+  assert.equal(f.automation.state().reason, 'needs-input'); assert.equal(f.automation.state().armed, true);
 });
 test('delegation polls local execution state every three seconds without sending another SSH command', async t => {
   t.mock.timers.enable({ apis: ['setInterval'] });
@@ -140,4 +140,20 @@ test('delegation polls local execution state every three seconds without sending
   f.automation.arm({ sessionId: 'first', model: 'model' }); f.automation.submit({ sessionId: 'first', model: 'model', goal: '점검' }); await tick();
   t.mock.timers.tick(3000); await tick(); assert.match(f.automation.state().phase, /3초 간격/); assert.deepEqual(f.commands, ['sleep 99']);
   f.finish('finished'); await f.automation.running; assert.equal(f.automation.state().reason, 'completed');
+});
+
+test('a repeated plan after task-list creation is corrected and delegation continues on the same server', async t => {
+  const plan = { action: 'plan', summary: '작업 순서', command: '', tasks: ['읽기 전용 보안 점검', '결과 확인'] };
+  const f = fixture(t, [plan, plan, { action: 'run', task: 1, summary: 'OS 확인', command: 'cat /etc/os-release' }, { action: 'run', task: 2, summary: '포트 확인', command: 'ss -lnt' }, { action: 'done', task: 2, summary: '결과 확인 완료', command: '' }]);
+  f.automation.arm({ sessionId: 'first', model: 'model' }); f.automation.submit({ sessionId: 'first', model: 'model', goal: '서버 취약점 분석' });
+  await tick(); assert.deepEqual(f.commands, ['cat /etc/os-release']); assert.equal(f.automation.state().armed, true);
+  assert.match(f.calls[2].input.at(-1).content, /다시 plan을 만들지 말고/);
+  f.finish('Ubuntu'); await tick(); assert.deepEqual(f.commands, ['cat /etc/os-release', 'ss -lnt']);
+  f.finish('LISTEN'); await f.automation.running; assert.equal(f.automation.state().reason, 'completed'); assert.equal(f.automation.state().armed, true);
+});
+test('repeated invalid planning pauses the current task while leaving the same session delegation ON', async t => {
+  const plan = { action: 'plan', summary: '작업 순서', command: '', tasks: ['OS 확인'] };
+  const f = fixture(t, [plan, plan, plan, plan]);
+  f.automation.arm({ sessionId: 'first', model: 'model' }); f.automation.submit({ sessionId: 'first', model: 'model', goal: '서버 점검' });
+  await f.automation.running; assert.deepEqual(f.commands, []); assert.equal(f.automation.state().reason, 'needs-input'); assert.equal(f.automation.state().armed, true);
 });

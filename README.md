@@ -47,7 +47,7 @@ npm start
 
 ## 서버 작업 위임
 
-위임은 먼저 번호가 붙은 작업 목록을 만들고, 각 항목을 순서대로 진행합니다. 명령 실행 중에는 3초마다 앱 내부의 SSH 실행 상태를 확인하고, 확인된 종료 상태와 출력으로 다음 작업을 계획합니다. 상태 확인을 위해 실행 중인 터미널에 명령을 끼워 넣지 않습니다. 항목을 건너뛰거나 확인되지 않은 결과를 완료로 처리하지 않으며, 완료 후에는 짧은 결과를 채팅에 보고합니다.
+위임은 먼저 번호가 붙은 작업 목록을 만들고, 각 항목을 순서대로 진행합니다. 명령 실행 중에는 3초마다 앱 내부의 SSH 실행 상태를 확인하고, 확인된 종료 상태와 출력으로 다음 작업을 계획합니다. 상태 확인을 위해 실행 중인 터미널에 명령을 끼워 넣지 않습니다. 항목을 건너뛰거나 확인되지 않은 결과를 완료로 처리하지 않으며, 계획을 한 번 만든 뒤에는 다음 명령을 요청하며, 계획이나 형식이 잘못 반복되면 명령을 실행하지 않고 현재 작업만 일시 중지합니다. 같은 SSH 세션의 위임 ON은 유지됩니다. 완료 후에는 짧은 결과를 채팅에 보고합니다.
 
 
 
@@ -65,7 +65,7 @@ SSH 연결과 ChatGPT 로그인 후 **위임 OFF**를 눌러 켜고, 기존 채�
 
 - 셸이 새 프롬프트를 반환했는지 확인한 뒤 AI 명령을 보냅니다. 입력 중인 줄이나 실행 중인 프로그램에 명령을 끼워 넣지 않습니다. 출력을 잠시 멈춘 것을 완료로 간주하지 않습니다.
 - AI 실행 중에는 일반 입력·붙여넣기 충돌을 막습니다. **직접 조작** 또는 선택 영역이 없는 Ctrl+C로 AI를 멈추고 조작권을 가져올 수 있습니다. 실행이 끝났다고 확인하지 못하면 결과는 불확실로 기록합니다.
-- AI가 다음 단계를 계획 중일 때 사람이 터미널에 입력하거나 붙여넣으면 위임을 중지합니다. 사용자가 다시 시작하지 않으면 AI가 자동으로 조작권을 되가져가지 않습니다.
+- AI가 다음 단계를 계획 중일 때 사람이 터미널에 입력하거나 붙여넣으면 현재 작업을 중지합니다. 현재 작업만 중지하고 위임 ON은 유지합니다. 사용자가 다음 채팅 목표를 보낼 때까지 AI가 자동으로 조작권을 되가져가지 않습니다.
 - Bash·Zsh의 프롬프트 훅을 현재 셸 프로세스에 연결해 종료를 확인합니다. 서버 시작 파일을 수정하지 않습니다. 셸 연동이 확인되지 않거나 사용자가 훅을 변경하면 AI 실행을 허용하지 않고 직접 터미널 조작을 유지합니다.
 - 전체 화면 프로그램·암호 입력처럼 직접 상호작용이 필요한 경우 사람이 조작합니다. 이 기능은 터미널 출력·상태 공유이며 데스크톱 화면 캡처 공유는 아닙니다.
 
@@ -183,7 +183,7 @@ Approved commands run in the same interactive SSH PTY you use. Your current dire
 
 ### Delegate an installation or configuration goal
 
-Delegation first creates an ordered task list. It runs one command at a time and checks the local SSH execution state every three seconds while a command is active. Once an exit is confirmed, the AI reads the observed output and chooses the next step. The app does not inject polling commands into the busy terminal. Tasks cannot be skipped, and completion requires a confirmed execution result; a short final report appears in chat.
+Delegation first creates an ordered task list. It runs one command at a time and checks the local SSH execution state every three seconds while a command is active. Once an exit is confirmed, the AI reads the observed output and chooses the next step. The app does not inject polling commands into the busy terminal. Tasks cannot be skipped, and completion requires a confirmed execution result; a short final report appears in chat. If an AI response repeats the plan or has an invalid format, the app requests a correction and pauses only the current task if that fails. Delegation remains ON in the same SSH session.
 
 
 
@@ -191,7 +191,7 @@ Connect to SSH, sign in to ChatGPT, select a model, and click **위임 OFF** to 
 
 > Install nginx, PHP 8.5, and MariaDB, then verify their versions and service health.
 
-Turning ON authorizes delegation for the current server and shows one informational message. Goals sent through the existing chat run without another consent dialog or checkbox. After completion or a request for more information, the mode stays ON for the next goal in the same context. Turning OFF, taking manual control, or changing the SSH tab, account, model, or connection revokes the mode. The AI is instructed to form an overall plan, inspect the OS and existing configuration, execute one step at a time, analyze the observed result, adjust the plan, and verify the requested outcome. Commands, results, and progress appear in the app. Delegation uses task context separate from normal chat and retains a cumulative progress checkpoint for longer tasks.
+Turning ON authorizes delegation for the current server and shows one informational message. Goals sent through the existing chat run without another consent dialog or checkbox. After completion or a request for more information, the mode stays ON for the next goal in the same context. Turning OFF revokes the mode. Taking manual control pauses the current task while keeping the mode ON for the same SSH session. Changing the SSH tab, account, model, or connection revokes the session binding. The AI is instructed to form an overall plan, inspect the OS and existing configuration, execute one step at a time, analyze the observed result, adjust the plan, and verify the requested outcome. Commands, results, and progress appear in the app. Delegation uses task context separate from normal chat and retains a cumulative progress checkpoint for longer tasks.
 
 - There is no arbitrary step-count, overall task-duration, or command-runtime cutoff. A task can continue beyond the former 30-step, 30-minute, and ten-minute command limits until completion or an explicit stopping condition.
 - Delegated commands run with the connected SSH account's permissions and can install software or change server configuration without individual command approvals within the consented goal.

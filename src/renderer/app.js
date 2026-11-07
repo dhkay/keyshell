@@ -254,7 +254,7 @@ function renderSharing() {
   $('delegation-toggle').disabled = !delegateMode && (!connected || !auth.activeAccountId || !models.length || pendingRequests.has(active));
   $('delegation-status').hidden = !delegateMode && !delegationState.reason;
   const ended = { completed: '목표 완료', 'manual-takeover': '직접 조작으로 전환', 'needs-input': '추가 입력 필요', stopped: '사용자가 중지함', 'result-unknown': '실행 결과가 불확실하여 중지' }[delegationState.reason] || delegationState.reason;
-  $('delegation-status').textContent = delegationState.enabled ? `위임 진행 · ${delegationState.phase} · 작업 ${delegationState.currentTask || 0}/${delegationState.tasks?.length || 0}: ${delegationState.tasks?.[delegationState.currentTask - 1]?.title || "목록 작성 중"}` : delegationState.armed ? `${delegationState.reason === 'completed' ? '목표 완료 · ' : ''}위임 ON` : `위임 종료 · ${ended}`;
+  $('delegation-status').textContent = delegationState.enabled ? `위임 진행 · ${delegationState.phase} · 작업 ${delegationState.currentTask || 0}/${delegationState.tasks?.length || 0}: ${delegationState.tasks?.[delegationState.currentTask - 1]?.title || "목록 작성 중"}` : delegationState.armed ? `${delegationState.reason === 'completed' ? '목표 완료 · ' : delegationState.reason === 'needs-input' ? '작업 일시 중지 · ' : delegationState.reason === 'result-unknown' ? '실행 결과 확인 필요 · ' : delegationState.reason === 'manual-takeover' ? '직접 조작 중 · ' : delegationState.reason === 'cancelled' ? '작업 취소됨 · ' : ''}위임 ON` : `위임 종료 · ${ended}`;
   $('advice-toggle').disabled ||= delegateMode;
   $('preview-toggle').disabled = delegationState.enabled;
   const shared = sessions.get(active)?.meta;
