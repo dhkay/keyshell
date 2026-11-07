@@ -5,11 +5,11 @@ on:
     inputs:
       candidate_run:
         description: Successful Development installers run ID
-        default: '42255868706'
+        default: '42349271637'
         required: true
       source_sha:
         description: Exact verified source commit
-        default: '216446618526afdb6503a962883fc68b652bd564'
+        default: 'e07a9d2cf7f80b41cedae5b1fcd281b714bfa373'
         required: true
   push:
     branches: [main]
@@ -28,8 +28,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      CANDIDATE_RUN: ${{ inputs.candidate_run || '42255868706' }}
-      SOURCE_SHA: ${{ inputs.source_sha || '216446618526afdb6503a962883fc68b652bd564' }}
+      CANDIDATE_RUN: ${{ inputs.candidate_run || '42349271637' }}
+      SOURCE_SHA: ${{ inputs.source_sha || 'e07a9d2cf7f80b41cedae5b1fcd281b714bfa373' }}
     steps:
       - name: 검증된 빌드 출처 확인
         shell: bash
@@ -96,13 +96,18 @@ jobs:
           모든 파일은 분할하지 않은 원본 설치파일입니다. `SHA256SUMS.txt`로 무결성을 확인할 수 있습니다.
 
           ## 변경 사항
-          - ChatGPT 연결 여부와 계정을 설정 화면에 실시간 표시
-          - Enter 즉시 전송, Shift+Enter 줄바꿈, 한글 조합 Enter 보호
-          - 미리보기 ON/OFF (기본 OFF)
-          - SSH 세션별 AI 자동 조언 ON/OFF (기본 OFF, 공유 범위 확인 후 활성화)
-          - 자동 조언은 새 출력 최대 8KiB, 최소 60초 간격, 최대 10회
-          - 중복 전송, 취소 후 대기, 탭·계정·모델 변경 시 상태 처리 보완
-          - 제안된 명령 실행은 계속 별도 승인이 필요합니다.
+          - Review & run 승인 실행 수정: `php -v`, `php-fpm8.5 -v` 등 명령 이름 허용 목록 제한 제거. 전체 명령을 검토하고 승인하면 한 번 실행
+          - Electron 비동기 클립보드 처리 수정: Copy 후 터미널 붙여넣기 정상 동작
+          - PuTTY 방식 드래그 복사·오른쪽 클릭 붙여넣기·Shift+오른쪽 클릭 메뉴
+          - Ctrl+V / Ctrl+Shift+V / Shift+Insert / Mac ⌘V, 상단 붙여넣기 버튼 지원
+          - 여러 줄·제어 문자 붙여넣기는 확인 후 입력, 한 줄은 Enter 없이 입력
+          - 명령 카드와 검토 화면에 ‘터미널에 넣기’ 추가
+          - 글자 크기·스크롤 기록 설정, A−/A+와 화면 지우기 추가
+          - ‘미리보기’ → ‘전송 전 확인’, 자동 조언 → ‘AI 터미널 공유’로 구분. 공유 대상은 SSH 출력 텍스트이며 화면 캡처는 포함하지 않음
+          - 자동 조언 10회 제한 제거. 새 출력 최대 8KiB와 최소 60초 간격 유지, 오래된 AI 맥락은 최근 64KiB로 정리
+          - SSH 연결·계정·모델·탭 변경 시 공유 중지, 명령 실행은 별도 승인 유지
+
+          PuTTY의 Telnet/시리얼, 포트 포워딩·프록시·에이전트 전체 기능은 아직 포함되지 않습니다.
 
           ## 개발용 사전 릴리스
           정식 Windows 인증서 서명과 Apple 공증은 적용되지 않았습니다. Mac 앱은 개발용 ad-hoc 서명입니다. OS 보안 정책에 따라 실행이 제한될 수 있으며 이 개발 빌드에서는 자동 업데이트를 설치하지 않습니다. 실제 계정의 OAuth 동의·플랜 권한·외부 AI 응답은 추가 확인 대상입니다.
