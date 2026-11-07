@@ -5,7 +5,7 @@ const call = (method, input) => window.keyshell.call(method, input);
 const sessions = new Map(), conversations = new Map(), pendingRequests = new Set();
 let connectionAttempt = null;
 let loginPending = false, loginError = '';
-let previewEnabled = false, adviceState = { enabled: false }, delegationState = { enabled: false }, composing = false;
+let previewEnabled = false, adviceState = { enabled: false }, delegationState = { enabled: false }, delegationReady = null, composing = false;
 const chatViews = new Map();
 function chatView(id = active) { if (!chatViews.has(id)) chatViews.set(id, { follow: true, top: 0 }); return chatViews.get(id); }
 function bottomOfChat() { const view = chatView(); view.follow = true; $('messages').scrollTop = $('messages').scrollHeight; view.top = $('messages').scrollTop; }
@@ -232,9 +232,11 @@ async function previewMessage() {
 function renderSharing() {
   const connected = sessions.get(active)?.meta.status === 'connected';
   $('preview-toggle').textContent = `전송 전 확인 ${previewEnabled ? 'ON' : 'OFF'}`; $('preview-toggle').setAttribute('aria-pressed', String(previewEnabled)); $('preview-toggle').title = 'AI로 보내기 전 질문·첨부·이전 대화의 내용을 확인합니다. 화면 공유 기능이 아닙니다.';
-  $('send-message').textContent = previewEnabled ? '내용 확인 →' : '전송 ↵'; $('send-message').setAttribute('aria-label', previewEnabled ? 'Preview message' : 'Send message');
+  if (delegationReady && (delegationReady.sessionId !== active || delegationReady.generation !== sessions.get(active)?.meta.generation || delegationReady.accountId !== auth.activeAccountId || delegationReady.model !== $('model').value || !connected)) delegationReady = null;
+  const delegateMode = !!delegationReady || delegationState.enabled;
+  $('send-message').textContent = delegateMode ? '위임 ↵' : previewEnabled ? '내용 확인 →' : '전송 ↵'; $('send-message').setAttribute('aria-label', delegateMode ? 'Delegate message' : previewEnabled ? 'Preview message' : 'Send message');
   $('send-message').disabled = delegationState.enabled || pendingRequests.has(active) || directRequests.has(active);
-  $('send-hint').textContent = previewEnabled ? 'Enter: 전송 내용 확인 · Shift+Enter: 줄바꿈' : 'Enter: 바로 전송 · Shift+Enter: 줄바꿈';
+  $('send-hint').textContent = delegateMode ? 'Enter: 채팅 내용을 목표로 위임 · Shift+Enter: 줄바꿈' : previewEnabled ? 'Enter: 전송 내용 확인 · Shift+Enter: 줄바꿈' : 'Enter: 바로 전송 · Shift+Enter: 줄바꿈';
   $('advice-toggle').textContent = `AI 터미널 공유 ${adviceState.enabled ? 'ON · 중지' : 'OFF'}`; $('advice-toggle').setAttribute('aria-pressed', String(adviceState.enabled));
   $('advice-toggle').disabled = !adviceState.enabled && (!connected || !auth.activeAccountId || !models.length);
   $('advice-toggle').title = adviceState.enabled ? '이후 자동 전송을 중지합니다.' : !connected ? '먼저 SSH 세션에 연결해 주세요.' : !auth.activeAccountId || !models.length ? 'ChatGPT 로그인과 모델 선택이 필요합니다.' : '공유할 계정·모델·출력 범위를 확인한 뒤 켤 수 있습니다.';
@@ -242,11 +244,12 @@ function renderSharing() {
   const reason = { stopped: '사용자가 중지했습니다.', cancelled: '응답을 취소했습니다.', 'tab-changed': '다른 탭으로 이동했습니다.', 'tab-closed': '세션 탭을 닫았습니다.', 'model-changed': '모델이 바뀌었습니다.', 'account-changed': '계정 또는 인증 상태가 바뀌었습니다.', 'connection-changed': 'SSH 연결이 바뀌거나 끊겼습니다.', 'context-changed': '공유 대상이 바뀌었습니다.', 'conversation-reset': '새 대화를 시작했습니다.', 'request-failed': 'AI 요청이 실패했습니다. 다시 켜기 전 연결과 사용 한도를 확인하세요.', 'renderer-restarted': '화면이 다시 시작됐습니다.' }[adviceState.reason] || '다시 켜려면 공유 범위를 확인하세요.';
   $('advice-status').textContent = adviceState.enabled ? '새 SSH 출력 자동 공유 중 · 횟수 제한 없음' : `자동 공유 중지 · ${reason}${adviceState.error ? ` ${errorText(adviceState.error)}` : ''}`;
   $('sharing-privacy').textContent = delegationState.enabled ? '위임 목표와 실행 명령·결과를 AI에 공유합니다. 화면 캡처는 공유하지 않습니다.' : adviceState.enabled ? '현재 SSH 출력과 이 대화의 이전 내용만 공유합니다. 화면 캡처는 공유하지 않습니다.' : '질문·직접 첨부·이전 대화를 전송합니다. 화면 캡처는 공유하지 않습니다.';
-  $('delegation-toggle').textContent = delegationState.enabled ? '위임 ON · 중지' : '위임 OFF'; $('delegation-toggle').setAttribute('aria-pressed', String(delegationState.enabled));
+  $('delegation-toggle').textContent = delegationState.enabled ? '위임 ON · 중지' : delegationReady ? '위임 ON' : '위임 OFF'; $('delegation-toggle').setAttribute('aria-pressed', String(delegateMode));
+  $('question').placeholder = delegateMode ? '이 서버에서 할 작업을 입력하세요…' : 'Ask about this session…';
   $('delegation-toggle').disabled = !delegationState.enabled && (!connected || !auth.activeAccountId || !models.length || pendingRequests.has(active));
-  $('delegation-status').hidden = !delegationState.enabled && !delegationState.reason;
+  $('delegation-status').hidden = !delegateMode && !delegationState.reason;
   const ended = { completed: '목표 완료', 'needs-input': '추가 입력 필요', stopped: '사용자가 중지함', 'result-unknown': '실행 결과가 불확실하여 중지' }[delegationState.reason] || delegationState.reason;
-  $('delegation-status').textContent = delegationState.enabled ? `위임 진행 · ${delegationState.phase} · 목표: ${delegationState.goal.slice(0, 160)}` : `위임 종료 · ${ended}`;
+  $('delegation-status').textContent = delegationState.enabled ? `위임 진행 · ${delegationState.phase} · 목표: ${delegationState.goal.slice(0, 160)}` : delegationReady ? `${delegationState.reason === 'completed' ? '목표 완료 · ' : ''}위임 대기 · 기존 채팅창에 목표를 입력하고 Enter를 누르세요.` : `위임 종료 · ${ended}`;
   $('advice-toggle').disabled ||= delegationState.enabled;
   $('preview-toggle').disabled = delegationState.enabled;
   $('terminal-paste').disabled = !connected;
@@ -256,6 +259,7 @@ async function submitMessage() {
   if (!$('question').value.trim()) { bottomOfChat(); return; }
   if (delegationState.enabled) return notice('위임 중에는 목표를 바꾸지 않습니다. 위임을 중지한 뒤 새 목표를 입력해 주세요.');
   if (pendingRequests.has(active) || directRequests.has(active)) return;
+  if (delegationReady) return reviewDelegation();
   if (previewEnabled) return previewMessage();
   if (!auth.activeAccountId || !models.length) return notice('Sign in and select an authorized AI model first.');
   const sessionId = active, question = $('question').value, selectedAttachment = attachment;
@@ -276,19 +280,26 @@ async function toggleAdvice() {
   actions(body, [button('Cancel', clearModal), enable]);
 }
 async function toggleDelegation() {
-  if (delegationState.enabled) { delegationState = await call('delegationStop'); renderSharing(); return; }
-  const id = active, model = $('model').value;
-  const body = modal('서버 작업 위임');
-  body.append(el('p', '설치하거나 변경할 내용을 구체적으로 입력하세요. AI가 서버 상태를 확인하고 작업과 검증을 순서대로 진행합니다.'));
-  const goal = field(body, '위임할 작업 목표', 'delegation-goal', 'text', $('question').value);
-  actions(body, [button('Cancel', clearModal), button('위임 내용 확인', async () => {
-    const prepared = await call('delegationPrepare', { sessionId: id, model, goal: goal.value });
+  if (delegationReady || delegationState.enabled) { delegationReady = null; delegationState = await call('delegationStop'); renderSharing(); return; }
+  const target = sessions.get(active)?.meta;
+  if (target?.status !== 'connected' || !auth.activeAccountId || !models.length) return notice('SSH 연결과 ChatGPT 계정·모델을 먼저 선택해 주세요.');
+  delegationReady = { sessionId: active, generation: target.generation, accountId: auth.activeAccountId, model: $('model').value };
+  renderSharing(); $('question').focus();
+}
+async function reviewDelegation() {
+  const id = active, goal = $('question').value, binding = delegationReady;
+  if (!binding || !goal.trim() || directRequests.has(id)) return;
+  directRequests.set(id, { question: goal }); renderSharing();
+  try {
+    const prepared = await call('delegationPrepare', { sessionId: id, model: binding.model, goal });
+    if (active !== id || delegationReady !== binding || sessions.get(id)?.meta.generation !== prepared.generation) { await call('delegationStop'); return; }
     const review = modal('위임 범위 확인', () => call('delegationStop'));
-    review.append(el('p', `서버: ${prepared.target.username}@${prepared.target.host}:${prepared.target.port}\n작업 목표: ${prepared.goal}`), el('div', prepared.target.fingerprint, { class: 'fingerprint' }), el('p', '이 목표를 위한 설치·설정 변경 명령을 매번 승인하지 않고 AI가 실행합니다. 현재 SSH 계정의 권한으로 서버가 변경됩니다. 실행 명령·출력·종료 상태를 표시하고 AI에 공유합니다. 단계·전체 시간·명령 실행 시간 제한 없이 목표를 완료하거나 직접 중지할 때까지 이어갑니다. 저장소 추가·비밀번호 입력·데이터 삭제 등 추가 판단이 필요하면 멈추고 질문합니다.'), el('p', '위임 중지 또는 탭·계정·모델·연결 변경 시 추가 실행을 중단하고 실행 중 명령에는 중지 신호를 보냅니다. 이미 적용한 변경은 자동으로 되돌리지 않습니다.'));
+    review.append(el('p', `서버: ${prepared.target.username}@${prepared.target.host}:${prepared.target.port}\n작업 목표: ${prepared.goal}`), el('div', prepared.target.fingerprint, { class: 'fingerprint' }), el('p', '이 채팅 내용을 목표로 설치·설정 변경 명령을 AI가 매번 승인 없이 실행합니다. 현재 SSH 계정 권한으로 서버가 변경되며 명령과 결과를 AI에 공유합니다. 횟수·시간 제한 없이 완료하거나 중지할 때까지 이어갑니다. 추가 정보나 권한이 필요하면 멈추고 질문합니다.'), el('p', '중지 또는 탭·계정·모델·연결 변경 시 추가 실행을 멈춥니다. 이미 적용한 변경은 자동으로 되돌리지 않습니다.'));
+    if (attachment) review.append(el('p', '현재 첨부된 출력은 이 위임에 포함되지 않습니다. 위임 목표에는 위에 표시한 채팅 내용만 사용합니다.'));
     const consent = field(review, '이 서버에서 위 목표의 설치·설정 변경을 AI에 위임합니다', 'delegation-consent', 'checkbox');
-    const start = button('동의하고 위임 시작', async () => { start.disabled = true; delegationState = await call('delegationStart', prepared.token); $('question').value = ''; modalCancel = null; clearModal(); renderSharing(); }, 'mint');
+    const start = button('동의하고 위임 시작', async () => { start.disabled = true; delegationState = await call('delegationStart', prepared.token); if ($('question').value === goal) $('question').value = ''; modalCancel = null; clearModal(); renderSharing(); }, 'mint');
     start.disabled = true; consent.onchange = () => { start.disabled = !consent.checked; }; actions(review, [button('Cancel', clearModal), start]);
-  }, 'mint')]);
+  } finally { directRequests.delete(id); renderSharing(); }
 }
 async function showExecution(command) {
   if (active === 'general') return notice('Connect and select an SSH session to review execution.');
@@ -404,8 +415,8 @@ window.keyshell.subscribe(safe(async ({ type, detail }) => {
     const node = executionNode(s, `${detail.id}-status`);
     node.textContent = `${detail.command}\nExecution: ${detail.status}${Number.isInteger(detail.exitCode) ? ` · exit ${detail.exitCode}` : ''}${detail.error ? ` · ${errorText(detail.error)}` : ''}`;
     if (detail.status === 'running') { const stop = button('Request remote TERM', async () => { await call('cancelExecution', detail.id); stop.disabled = true; }); node.append(stop); }
-  } else if (type === 'change') { loginPending = false; loginError = ''; if (!$('settings-auth-status') || !$('modal').open) clearModal(); discardSelection(); attachment = null; conversations.clear(); renderMessages(); renderAttachment(); $('cancel-login').hidden = true; await renderAuth(detail); }
-  else if (type === 'auth-error') { if (detail.code === 'E-AUTH-CANCELLED') return; loginPending = false; loginError = errorText(detail.code); $('cancel-login').hidden = true; renderSettingsAuth(); notice(detail.code); }
+  } else if (type === 'change') { delegationReady = null; loginPending = false; loginError = ''; if (!$('settings-auth-status') || !$('modal').open) clearModal(); discardSelection(); attachment = null; conversations.clear(); renderMessages(); renderAttachment(); $('cancel-login').hidden = true; await renderAuth(detail); }
+  else if (type === 'auth-error') { delegationReady = null; if (detail.code === 'E-AUTH-CANCELLED') return; loginPending = false; loginError = errorText(detail.code); $('cancel-login').hidden = true; renderSettingsAuth(); notice(detail.code); }
   else if (type === 'terminal-paste') { await presentPaste(detail.sessionId, detail.preview); }
   else if (type === 'clipboard-error') { notice(detail.code); }
   else if (type === 'delegation') { delegationState = detail; renderSharing(); }
@@ -451,9 +462,9 @@ $('login').onclick = safe(() => login()); $('add-account').onclick = safe(() => 
 $('cancel-login').onclick = safe(cancelLogin);
 $('logout').onclick = safe(async () => showLogoutResult(await call('logout')));
 $('account').onchange = safe(() => $('account').value ? call('account', $('account').value) : null);
-$('model').onchange = safe(() => call('model', { id: active, model: $('model').value }));
-$('new-chat').onclick = safe(async () => { await call('reset', active); pendingRequests.delete(active); $('cancel-ai').hidden = true; conversations.delete(active); attachment = null; renderMessages(); renderAttachment(); });
-$('cancel-ai').onclick = safe(async () => { await call('cancelAI', active); pendingRequests.delete(active); $('cancel-ai').hidden = true; notice('AI request cancelled. A transmitted request may have reached the service.'); });
+$('model').onchange = safe(async () => { delegationReady = null; await call('model', { id: active, model: $('model').value }); renderSharing(); });
+$('new-chat').onclick = safe(async () => { delegationReady = null; await call('reset', active); pendingRequests.delete(active); $('cancel-ai').hidden = true; conversations.delete(active); attachment = null; renderMessages(); renderAttachment(); });
+$('cancel-ai').onclick = safe(async () => { delegationReady = null; await call('cancelAI', active); pendingRequests.delete(active); $('cancel-ai').hidden = true; notice('AI request cancelled. A transmitted request may have reached the service.'); });
 setInterval(() => { const s = sessions.get(active); $('elapsed').textContent = s ? `${s.meta.status} · ${Math.floor((Date.now() - s.since) / 60000)}m · latency not measured` : 'No active session'; }, 1000);
 async function start() { const state = await call('state'); previewEnabled = state.previewEnabled; adviceState = state.advice; delegationState = state.delegation; profiles = state.profiles; settings.version = state.version; settings.packaged = state.packaged; renderProfiles(); for (const meta of state.sessions) ensureSession(meta); await renderAuth(state.auth); await activate('general'); if (state.recovery) { $('recovery').textContent = state.recovery.message; $('recovery').hidden = false; } for (const e of state.executions || []) { const s = sessions.get(e.sessionId); if (s) executionNode(s, `${e.id}-status`).textContent = `${e.command}\nExecution: ${e.status}${Number.isInteger(e.exitCode) ? ` · exit ${e.exitCode}` : ''}\nPrevious output was not recovered after renderer restart.`; } }
 start().catch(notice);

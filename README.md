@@ -40,7 +40,7 @@ npm start
 
 ## 서버 작업 위임
 
-SSH 연결과 ChatGPT 로그인 후 **위임 OFF**를 눌러 작업 목표를 입력합니다. 예: `nginx, PHP 8.5, MariaDB 설치 후 버전과 서비스 상태를 확인해줘`. 대상 서버·지문·목표를 확인하고 동의하면 해당 목표의 명령을 AI가 매번 승인 없이 실행합니다. 실행 명령·출력·종료 상태를 표시하고 결과를 받은 후 다음 작업을 결정합니다. 기존 일반 대화와 분리된 작업 맥락을 사용합니다.
+SSH 연결과 ChatGPT 로그인 후 **위임 OFF**를 눌러 켜고, 기존 채팅창에 작업 목표를 작성해 Enter로 보냅니다. 별도 목표 입력창은 없습니다. 예: `nginx, PHP 8.5, MariaDB 설치 후 버전과 서비스 상태를 확인해줘`. 대상 서버·지문·목표를 확인하고 동의하면 해당 목표의 명령을 AI가 매번 승인 없이 실행합니다. 실행 명령·출력·종료 상태를 표시하고 결과를 받은 후 다음 작업을 결정합니다. 기존 일반 대화와 분리된 작업 맥락을 사용합니다. 목표가 완료되면 같은 서버에서 위임 ON을 유지하고 다음 목표를 기존 채팅창으로 받습니다. 확인을 취소하면 작성한 내용은 남습니다. 위임 버튼으로 끄거나 탭·계정·모델·연결이 바뀌면 위임 모드가 해제됩니다.
 
 - AI는 OS와 기존 구성을 먼저 확인하고, 설치·설정 변경 및 검증을 순차적으로 요청합니다. 원격 명령은 현재 SSH 계정 권한으로 실행합니다. 비밀번호 입력이 필요한 설치는 수동 작업으로 전환합니다.
 - 위임의 단계 수·전체 작업 시간·명령 실행 시간에는 인위적인 제한이 없습니다. 전체 계획과 누적 진행 상황을 유지하며 결과에 따라 다음 단계를 결정합니다. 완료·추가 입력 필요·불확실한 종료·AI 오류 시 자동 재시도 없이 멈춥니다.
@@ -155,11 +155,11 @@ Commands run through separate noninteractive SSH exec channels. They do not inhe
 
 ### Delegate an installation or configuration goal
 
-Connect to SSH, sign in to ChatGPT, select a model, and click **위임 OFF**. Enter a goal, for example:
+Connect to SSH, sign in to ChatGPT, select a model, and click **위임 OFF** to turn delegation ON. Write the goal in the existing chat input and press Enter; there is no separate goal entry window. For example:
 
 > Install nginx, PHP 8.5, and MariaDB, then verify their versions and service health.
 
-Review the SSH target, fingerprint, goal, and authority to make changes, then explicitly start delegation. The AI is instructed to form an overall plan, inspect the OS and existing configuration, execute one step at a time, analyze the observed result, adjust the plan, and verify the requested outcome. Commands, results, and progress appear in the app. Delegation uses task context separate from normal chat and retains a cumulative progress checkpoint for longer tasks.
+Review the SSH target, fingerprint, the goal you sent from chat, and authority to make changes, then explicitly start delegation. Cancelling this review keeps your draft. After a goal finishes, delegation stays ON for your next chat goal in the same context; click the toggle to turn it OFF. Changing the SSH tab, account, model, or connection clears the mode. The AI is instructed to form an overall plan, inspect the OS and existing configuration, execute one step at a time, analyze the observed result, adjust the plan, and verify the requested outcome. Commands, results, and progress appear in the app. Delegation uses task context separate from normal chat and retains a cumulative progress checkpoint for longer tasks.
 
 - There is no arbitrary step-count, overall task-duration, or command-runtime cutoff. A task can continue beyond the former 30-step, 30-minute, and ten-minute command limits until completion or an explicit stopping condition.
 - Delegated commands run with the connected SSH account's permissions and can install software or change server configuration without individual command approvals within the consented goal.

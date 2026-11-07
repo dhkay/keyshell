@@ -411,11 +411,31 @@ test('delegation and chat scroll: held reading position, empty Enter, result fol
     await page.getByRole('button', { name: 'Review & run', exact: true }).click(); assert.equal(await page.getByLabel('실행 결과를 AI에 보내고 다음 작업 제안 받기', { exact: true }).isChecked(), true); await page.getByRole('button', { name: 'Approve & run once', exact: true }).click();
     await page.locator('#messages .answer').filter({ hasText: 'PHP 결과를 확인했습니다' }).waitFor(); assert.deepEqual(commands, ['php -v']);
     let payloads = await app.evaluate(({ app }) => app.__automationPayloads); assert.match(JSON.stringify(payloads[1]), /PHP 8.5/); assert.match(JSON.stringify(payloads[1]), /completed/);
-    const begin = async goal => { await input.fill(goal); await page.locator('#delegation-toggle').click(); await page.getByRole('button', { name: '위임 내용 확인', exact: true }).click(); assert.deepEqual(commands.length, goal === 'nginx PHP MariaDB 설치 확인' ? 1 : 3); await page.getByLabel('이 서버에서 위 목표의 설치·설정 변경을 AI에 위임합니다', { exact: true }).check(); await page.getByRole('button', { name: '동의하고 위임 시작', exact: true }).click(); };
+    const begin = async goal => {
+      if (await page.locator('#delegation-toggle').getAttribute('aria-pressed') === 'false') {
+        const before = await app.evaluate(({ app }) => app.__automationPayloads.length);
+        await page.locator('#delegation-toggle').click();
+        assert.equal(await page.locator('#modal').evaluate(n => n.open), false);
+        assert.equal(await app.evaluate(({ app }) => app.__automationPayloads.length), before);
+      }
+      await input.fill(goal); await input.press('Enter');
+      await page.getByRole('heading', { name: '위임 범위 확인', exact: true }).waitFor();
+      assert.equal(await page.locator('[name="delegation-goal"]').count(), 0);
+      assert.match(await page.locator('#modal-body').textContent(), new RegExp(goal));
+      assert.equal(commands.length, goal === 'nginx PHP MariaDB 설치 확인' ? 1 : 3);
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+      assert.equal(await input.inputValue(), goal);
+      await input.press('Enter');
+      await page.getByLabel('이 서버에서 위 목표의 설치·설정 변경을 AI에 위임합니다', { exact: true }).check(); await page.getByRole('button', { name: '동의하고 위임 시작', exact: true }).click();
+    };
     await begin('nginx PHP MariaDB 설치 확인'); await page.locator('#delegation-status').filter({ hasText: '목표 완료' }).waitFor(); assert.deepEqual(commands, ['php -v', 'cat /etc/os-release', 'nginx -v && php -v && mariadb --version']);
-    payloads = await app.evaluate(({ app }) => app.__automationPayloads); assert.match(JSON.stringify(payloads[3]), /Ubuntu fixture/); assert.match(JSON.stringify(payloads[4]), /MariaDB 11/); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'false');
+    payloads = await app.evaluate(({ app }) => app.__automationPayloads); assert.match(JSON.stringify(payloads[3]), /Ubuntu fixture/); assert.match(JSON.stringify(payloads[4]), /MariaDB 11/); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'true');
     await app.evaluate(({ app }) => { app.__delegationSteps = [{ action: 'run', summary: '중지 검사', command: 'sleep 99' }, { action: 'run', summary: '실행되면 안 됨', command: 'whoami' }]; });
     await begin('대기 작업 검사'); await page.locator('#delegation-status').filter({ hasText: '명령 실행 중' }).waitFor(); await page.locator('#delegation-toggle').click(); await page.locator('#delegation-status').filter({ hasText: '사용자가 중지함' }).waitFor(); await page.waitForTimeout(150); assert.deepEqual(commands, ['php -v', 'cat /etc/os-release', 'nginx -v && php -v && mariadb --version', 'sleep 99']);
+    await page.locator('#delegation-toggle').click(); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'true');
+    await page.locator('#model').selectOption('fixture-alternate'); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'false');
+    await page.locator('#delegation-toggle').click(); await page.getByRole('button', { name: 'General conversation', exact: true }).click(); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'false');
+    await page.getByRole('button', { name: 'Delegation SSH', exact: true }).last().click(); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'false');
     await page.screenshot({ path: path.resolve('docs/verification/desktop/delegation.png') }); assert.deepEqual(errors, []);
   } finally { for (const client of clients) { client.end(); client._sock?.destroy(); } if (app) { await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); }).catch(() => {}); await app.close().catch(() => {}); } await new Promise(resolve => server.close(resolve)); fs.rmSync(directory, { recursive: true, force: true }); }
 });
