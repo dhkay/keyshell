@@ -120,7 +120,12 @@ jobs:
             echo '같은 태그의 릴리스가 이미 있습니다. 기존 릴리스를 덮어쓰지 않습니다.'
             exit 1
           fi
-          gh release create "$RELEASE_TAG" --repo "$GH_REPO" --target "$SOURCE_SHA" --title "KeyShell $RELEASE_VERSION (개발용)" --draft --prerelease --latest=false --notes-file release-notes.md
+          gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" > verified-tag.json
+          node <<'NODE'
+          const tag = require('./verified-tag.json');
+          if (tag.object.type !== 'commit' || tag.object.sha !== process.env.SOURCE_SHA) throw new Error('릴리스 태그가 검증된 소스와 일치하지 않습니다');
+          NODE
+          gh release create "$RELEASE_TAG" --repo "$GH_REPO" --target "$SOURCE_SHA" --title "KeyShell $RELEASE_VERSION (개발용)" --verify-tag --draft --prerelease --latest=false --notes-file release-notes.md
           gh release upload "$RELEASE_TAG" release-assets/* --repo "$GH_REPO"
           gh api "repos/$GH_REPO/releases?per_page=100" > uploaded-releases.json
           node <<'NODE'
