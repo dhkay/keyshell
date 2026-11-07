@@ -5,11 +5,11 @@ on:
     inputs:
       candidate_run:
         description: Successful Development installers run ID
-        default: '42353972899'
+        default: '42355154823'
         required: true
       source_sha:
         description: Exact verified source commit
-        default: '7ee5d4992ec8eaf02ada4b1ce68278ccda298d21'
+        default: 'afe45993da370499f0f9e3236a4faccbed3e16ed'
         required: true
   push:
     branches: [main]
@@ -28,8 +28,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      CANDIDATE_RUN: ${{ inputs.candidate_run || '42353972899' }}
-      SOURCE_SHA: ${{ inputs.source_sha || '7ee5d4992ec8eaf02ada4b1ce68278ccda298d21' }}
+      CANDIDATE_RUN: ${{ inputs.candidate_run || '42355154823' }}
+      SOURCE_SHA: ${{ inputs.source_sha || 'afe45993da370499f0f9e3236a4faccbed3e16ed' }}
     steps:
       - name: 검증된 빌드 출처 확인
         shell: bash
@@ -96,6 +96,9 @@ jobs:
           모든 파일은 분할하지 않은 원본 설치파일입니다. `SHA256SUMS.txt`로 무결성을 확인할 수 있습니다.
 
           ## 변경 사항
+          - 별도 위임 목표 입력창 제거: 위임 ON 후 기존 채팅창에서 목표를 입력하고 Enter로 전송
+          - 채팅으로 보낸 목표와 서버를 확인한 뒤 시작. 확인 취소 시 입력 내용 유지
+          - 완료 후 같은 서버에서 ON을 유지해 다음 채팅 목표 수신. 탭·계정·모델·연결 변경 시 모드 해제
           - 위임의 30단계·30분 및 명령별 10분 제한 제거. 목표 완료 또는 중지 조건까지 작업 지속
           - 전체 작업 계획과 누적 진행 체크포인트를 유지하고 실행 결과에 따라 다음 단계 조정
           - README 한국어·영어 이동 링크와 영문 설치·사용·위임·데이터 안내 추가
