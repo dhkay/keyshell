@@ -30,7 +30,7 @@ npm start
 - `AI 터미널 공유`은 기본 OFF입니다. 연결된 현재 SSH 세션에서 계정·모델·공유 범위를 확인하고 동의한 뒤 켤 수 있습니다. 일반 질문의 미리보기 설정과 별도의 자동 공유 동의입니다.
 - 자동 조언은 활성화 이후 앱에서 새로 수신한 출력만 최대 8KiB 모읍니다. 2초간 출력이 없거나 최대 10초 모으면 안내를 요청하되 최소 60초 간격으로 보내며 횟수 제한은 없습니다. 계속 공유할 수 있도록 이전 AI 맥락은 최근 64KiB로 정리하고 정리 여부를 표시합니다. 기존 대화도 요청에 포함되므로 전체 요청 크기는 출력 제한보다 클 수 있습니다.
 - 자동 조언은 끄기·탭 이동·연결 종료·계정/모델 변경·새 대화·요청 오류·화면 재시작 때 중지합니다. 이미 전송한 정보는 회수하지 못합니다. 화면 캡처·다른 세션·키보드 입력·인증정보 저장소는 자동으로 읽지 않습니다.
-- 미리보기 설정과 자동 조언 동의는 현재 앱 실행 중에만 유지합니다. 일반 모드의 AI 제안 명령은 별도 실행 검토와 승인을 거칩니다. 위임 모드는 목표별 동의로 연속 실행합니다.
+- 미리보기 설정과 자동 조언 동의는 현재 앱 실행 중에만 유지합니다. 일반 모드의 AI 제안 명령은 별도 실행 검토와 승인을 거칩니다. 위임 모드는 현재 서버에서 ON을 누른 뒤 채팅으로 요청한 목표를 연속 실행합니다.
 
 ## 채팅 위치와 실행 결과 분석
 
@@ -38,9 +38,16 @@ npm start
 
 `Review & run`의 **실행 결과를 AI에 보내고 다음 작업 제안 받기**를 선택하면, 명령 종료 후 실제 출력(최근 16KiB)·종료 코드·종료 상태를 묶어 분석합니다. AI 터미널 공유를 켜지 않아도 동작합니다. 다음 제안 명령은 일반 모드에서 자동 실행하지 않습니다. 출력이 없는 명령과 실패·불확실한 종료도 분석 대상이며, 연결·탭·계정·모델 변경이나 취소 후 결과는 보내지 않습니다.
 
+## AI 전송 전 민감정보 가림
+
+- 기본 적용이며 끄는 옵션은 없습니다. 질문·첨부 로그·이전 대화·자동 터미널 공유·승인 실행 결과·위임 목표와 진행 요약을 로컬에서 검사한 뒤 AI 요청을 만듭니다. 전송 전 확인에는 실제 전송할 가려진 본문을 표시합니다.
+- IPv4/IPv6, 비밀번호·패스프레이즈·API 키, 인증 토큰/JWT·쿠키·개인키 블록, DB URL의 비밀번호, 일부 CLI 비밀번호 옵션과 알려진 서비스 키 형식을 `****`로 바꿉니다. SSH에 입력한 비밀번호/패스프레이즈는 이름표 없는 복사본과 JSON/URL 이스케이프 형태도 비교합니다. 이 비교 목록은 원문 대신 앱 실행 동안만 유지하는 keyed hash를 사용합니다.
+- 민감정보 목록이 바뀌면 오래된 전송 확인을 무효화하고 대기 중 요청도 전송 전에 차단합니다. 검사를 완료하지 못하면 전송하지 않습니다. `****`가 든 AI 명령은 실제 값으로 복원하지 않으며 실행을 멈추고 직접 입력을 요청합니다.
+- 본인의 로컬 SSH 화면·클립보드·접속 프로필 및 서버 로그/셸 히스토리 원본을 수정하는 기능은 아닙니다. AI에 보내는 로그의 사본에 적용합니다. 그 밖의 내용은 외부 AI로 전송됩니다. 형식 없는 미등록 비밀, 임의 인코딩, 잘려서 식별할 수 없는 값 등 모든 비밀을 완벽히 탐지한다고 보장하지 않습니다. 도메인·사용자명·이메일·파일 경로·업무 데이터도 자동으로 모두 가려지는 것은 아닙니다.
+
 ## 서버 작업 위임
 
-SSH 연결과 ChatGPT 로그인 후 **위임 OFF**를 눌러 켜고, 기존 채팅창에 작업 목표를 작성해 Enter로 보냅니다. 별도 목표 입력창은 없습니다. 예: `nginx, PHP 8.5, MariaDB 설치 후 버전과 서비스 상태를 확인해줘`. 대상 서버·지문·목표를 확인하고 동의하면 해당 목표의 명령을 AI가 매번 승인 없이 실행합니다. 실행 명령·출력·종료 상태를 표시하고 결과를 받은 후 다음 작업을 결정합니다. 기존 일반 대화와 분리된 작업 맥락을 사용합니다. 목표가 완료되면 같은 서버에서 위임 ON을 유지하고 다음 목표를 기존 채팅창으로 받습니다. 확인을 취소하면 작성한 내용은 남습니다. 위임 버튼으로 끄거나 탭·계정·모델·연결이 바뀌면 위임 모드가 해제됩니다.
+SSH 연결과 ChatGPT 로그인 후 **위임 OFF**를 눌러 켜고, 기존 채팅창에 작업 목표를 작성해 Enter로 보냅니다. 별도 목표 입력창은 없습니다. 예: `nginx, PHP 8.5, MariaDB 설치 후 버전과 서비스 상태를 확인해줘`. ON을 누르면 현재 서버의 위임이 활성화되고 안내를 한 번 표시합니다. 이후 채팅으로 보낸 목표는 별도 동의창 없이 실행합니다. 실행 명령·출력·종료 상태를 표시하고 결과를 받은 후 다음 작업을 결정합니다. 기존 일반 대화와 분리된 작업 맥락을 사용합니다. 목표가 완료되면 같은 서버에서 위임 ON을 유지하고 다음 목표를 기존 채팅창으로 받습니다. 위임 버튼으로 끄거나 탭·계정·모델·연결이 바뀌면 위임 모드가 해제됩니다.
 
 - AI는 OS와 기존 구성을 먼저 확인하고, 설치·설정 변경 및 검증을 순차적으로 요청합니다. 원격 명령은 현재 SSH 계정 권한으로 실행합니다. 비밀번호 입력이 필요한 설치는 수동 작업으로 전환합니다.
 - 위임의 단계 수·전체 작업 시간·명령 실행 시간에는 인위적인 제한이 없습니다. 전체 계획과 누적 진행 상황을 유지하며 결과에 따라 다음 단계를 결정합니다. 완료·추가 입력 필요·불확실한 종료·AI 오류 시 자동 재시도 없이 멈춥니다.
@@ -99,8 +106,8 @@ npm run package:dev
 ## 데이터와 실행 경계
 
 - 전송 전 확인 ON에서는 질문·첨부·이전 대화가 포함된 전체 요청을 확인할 수 있습니다. OFF에서는 전송 동작을, 자동 조언에서는 별도의 세션별 동의를 공유 승인으로 사용합니다. 가림은 로컬에서 하며 모든 비밀을 탐지한다고 보장하지 않습니다.
-- 일반 대화에는 SSH 실행 도구나 인증정보 접근 권한을 제공하지 않습니다. 위임 모드에서만 목표별 동의 후 앱이 AI의 구조화된 명령 요청을 실행합니다. 터미널 출력과 AI 답변은 비신뢰 데이터로 처리합니다.
-- 앱의 승인·위임 명령은 현재 화면의 SSH PTY를 사용하며, 사용자의 현재 경로·환경을 이어 사용합니다. 별도 실행 결과 패널로 분리하지 않습니다. 명령어 허용 목록은 사용하지 않습니다. 사용자가 전체 명령과 대상을 확인해 한 번 승인하거나 위임 목표를 승인하면 실행하며, 숨겨진 제어 문자와 잘못된 입력만 거부합니다. 삭제·권한 변경·외부 전송·복합 셸 구문은 주의 항목으로 표시합니다.
+- 일반 대화에는 SSH 실행 도구나 인증정보 접근 권한을 제공하지 않습니다. 위임 ON 상태에서는 채팅으로 요청한 목표에 대해 앱이 AI의 구조화된 명령 요청을 실행합니다. 터미널 출력과 AI 답변은 비신뢰 데이터로 처리합니다.
+- 앱의 승인·위임 명령은 현재 화면의 SSH PTY를 사용하며, 사용자의 현재 경로·환경을 이어 사용합니다. 별도 실행 결과 패널로 분리하지 않습니다. 명령어 허용 목록은 사용하지 않습니다. 사용자가 전체 명령과 대상을 확인해 한 번 승인하거나 위임 ON 상태에서 채팅으로 목표를 보내면 실행하며, 숨겨진 제어 문자·잘못된 입력·가려진 값(****)이 포함된 명령은 거부합니다. 삭제·권한 변경·외부 전송·복합 셸 구문은 주의 항목으로 표시합니다.
 - 실패·연결 단절·앱 재시작으로 질문이나 명령을 자동 재전송하지 않습니다. 결과를 알 수 없을 때 성공으로 표시하지 않습니다.
 - 대화·터미널 출력·실행 기록은 메모리에만 보관합니다. 외부 제공자에게 이미 전송된 내용의 보관·삭제 범위는 제공자 정책을 따릅니다.
 
@@ -156,6 +163,12 @@ The controls currently use Korean labels:
 - Automatic sharing stops when disabled, when the tab, connection, account, model, or conversation changes, on request errors, or when the renderer restarts. These preferences and sharing consent apply only to the current app run. Information already transmitted cannot be recalled.
 - Requests use local secret masking, which can miss sensitive information. Review the information you choose to share.
 
+### Local masking before AI transmission
+
+Masking is always enabled. Questions, attached logs, history, automatic SSH sharing, command results, and delegated goals/checkpoints pass through the same local filter before the HTTP request is built. The preview shows the masked payload actually sent. IPv4/IPv6, password/API-key labels, recognized provider keys, tokens/JWTs, cookies, private-key blocks, database URL passwords, and supported CLI secret flags become `****`. SSH passwords/passphrases also register keyed comparison hashes for matching unlabeled, JSON-escaped, and URL-encoded copies during this app run; the registry does not retain their plaintext.
+
+A changed secret registry invalidates old previews and blocks queued requests before sending. Failed masking sends nothing. AI commands containing `****` pause for local input rather than restoring secrets or expanding shell wildcards. Your local SSH display, clipboard, connection profiles, and remote logs/history keep their original values; masking applies to the copy sent to AI. Remaining content still reaches the external provider. Unknown unlabelled, arbitrarily encoded, or truncated secrets can escape detection; domains, usernames, email addresses, file paths, and business data are not automatically all removed.
+
 ### Command review and result analysis
 
 Use **Review & run**, inspect the complete command and SSH target, then choose **Approve & run once**. Commands such as `php -v`, `php-fpm8.5 -v`, and package installation commands are not blocked by an executable-name allowlist. Hidden control characters and malformed input are rejected; displayed risk notices do not guarantee safety.
@@ -170,12 +183,12 @@ Connect to SSH, sign in to ChatGPT, select a model, and click **위임 OFF** to 
 
 > Install nginx, PHP 8.5, and MariaDB, then verify their versions and service health.
 
-Review the SSH target, fingerprint, the goal you sent from chat, and authority to make changes, then explicitly start delegation. Cancelling this review keeps your draft. After a goal finishes, delegation stays ON for your next chat goal in the same context; click the toggle to turn it OFF. Changing the SSH tab, account, model, or connection clears the mode. The AI is instructed to form an overall plan, inspect the OS and existing configuration, execute one step at a time, analyze the observed result, adjust the plan, and verify the requested outcome. Commands, results, and progress appear in the app. Delegation uses task context separate from normal chat and retains a cumulative progress checkpoint for longer tasks.
+Turning ON authorizes delegation for the current server and shows one informational message. Goals sent through the existing chat run without another consent dialog or checkbox. After completion or a request for more information, the mode stays ON for the next goal in the same context. Turning OFF, taking manual control, or changing the SSH tab, account, model, or connection revokes the mode. The AI is instructed to form an overall plan, inspect the OS and existing configuration, execute one step at a time, analyze the observed result, adjust the plan, and verify the requested outcome. Commands, results, and progress appear in the app. Delegation uses task context separate from normal chat and retains a cumulative progress checkpoint for longer tasks.
 
 - There is no arbitrary step-count, overall task-duration, or command-runtime cutoff. A task can continue beyond the former 30-step, 30-minute, and ten-minute command limits until completion or an explicit stopping condition.
 - Delegated commands run with the connected SSH account's permissions and can install software or change server configuration without individual command approvals within the consented goal.
 - **위임 ON · 중지** stops further steps and requests interruption with Ctrl+C in the shared terminal. Cancellation, tab/account/model/connection/conversation changes, and app restarts also stop further execution. Interruption does not guarantee remote termination; changes already applied are not automatically rolled back.
-- Completion, missing required information, AI errors, and uncertain execution results end delegation without automatic replay. A normal observed execution result is required before the app accepts a completion response. Routine authorized steps are planned automatically; credentials, interactive input, or further authority may require user involvement.
+- Completion and missing information end the current task while keeping the mode ON; AI errors and uncertain execution results turn the mode OFF without automatic replay. A normal observed execution result is required before the app accepts a completion response. Routine authorized steps are planned automatically; credentials, interactive input, or further authority may require user involvement.
 - Detected deletion, interactive commands, disk management, reboot, repository addition, and similar operations requiring further confirmation stop automatic execution for manual review. This is not a sandbox that can fully determine the effects or goal alignment of arbitrary shell commands. Output and AI responses remain untrusted data, and masking and risk detection are incomplete.
 - External AI service access, network availability, and account usage limits still apply.
 
@@ -214,7 +227,7 @@ For signed production releases, configure platform certificates and Apple notari
 
 ### Data and execution boundaries
 
-Normal chat does not receive SSH tools or access to stored credentials. In delegation mode, the application executes structured AI command requests only after goal-specific consent. Failed requests, lost connections, and app restarts do not automatically replay commands or questions. Unknown outcomes are not presented as successful executions.
+Normal chat does not receive SSH tools or access to stored credentials. In delegation mode, the application executes structured AI command requests when delegation is ON for that context and the user sends a goal in chat. Failed requests, lost connections, and app restarts do not automatically replay commands or questions. Unknown outcomes are not presented as successful executions.
 
 Conversations, terminal output, and execution records remain in memory and are discarded when the app exits. Profiles, trusted host keys, and account registration metadata persist locally; remembered tokens use available OS encryption. Information sent to an external AI service is subject to that provider's retention and deletion policies.
 

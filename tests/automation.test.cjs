@@ -31,9 +31,9 @@ test('delegation requires explicit goal consent, runs sequentially, reads final 
   const p = f.automation.prepare({ sessionId: 'first', model: 'model', goal: 'Install nginx' }); assert.deepEqual(f.commands, []);
   assert.throws(() => f.automation.start('invalid'), { code: 'E-DELEGATION-STALE' }); assert.deepEqual(f.commands, []);
   f.start(); await tick(); assert.deepEqual(f.commands, ['cat /etc/os-release']);
-  assert.equal(f.calls.length, 1); f.finish('package unavailable password=private', 1); await tick();
+  assert.equal(f.calls.length, 1); f.finish('package unavailable password=private host=192.0.2.44 API_KEY=DELEGATED_KEY_VALUE', 1); await tick();
   assert.deepEqual(f.commands, ['cat /etc/os-release', 'nginx -v']); const payload = JSON.stringify(f.calls[1]);
-  assert.match(payload, /failed/); assert.match(payload, /exitCode/); assert.ok(!payload.includes('private')); assert.ok(!payload.includes('UNRELATED_OLD_GOAL'));
+  assert.match(payload, /failed/); assert.match(payload, /exitCode/); assert.ok(!payload.includes('private')); assert.ok(!payload.includes('192.0.2.44')); assert.ok(!payload.includes('DELEGATED_KEY_VALUE')); assert.ok(!payload.includes('UNRELATED_OLD_GOAL'));
   f.finish('nginx/1.28'); await f.automation.running; assert.equal(f.automation.state().reason, 'completed'); assert.equal(f.automation.state().enabled, false); assert.equal(f.calls.length, 3);
   assert.match(JSON.stringify(f.calls[2]), /nginx\/1.28/); assert.equal(f.ai.sessions.get('first').history[0].content, 'UNRELATED_OLD_GOAL');
 });
@@ -86,4 +86,25 @@ test('delegation cannot report completion without an observed successful executi
 test('manual approval opt-out and cancelled follow-up never transmit results', async t => {
   const f = fixture(t, []); let e = f.ssh.prepareExecution('first', 'php -v'); f.automation.approve(e.token, false); f.finish('DO_NOT_SHARE'); await tick(); assert.equal(f.calls.length, 0);
   e = f.ssh.prepareExecution('first', 'php -v'); f.automation.approve(e.token, true); f.automation.stop('cancelled'); f.finish('AFTER_CANCEL_DO_NOT_SHARE'); await tick(); assert.equal(f.calls.length, 0);
+});
+
+test('one ON action arms the current server for multiple goals, with no per-goal consent', async t => {
+  const f = fixture(t, [{ action: 'ask', summary: '필요한 버전을 알려주세요', command: '' }, { action: 'ask', summary: '다음 작업 확인', command: '' }]);
+  const notices = []; f.automation.on('notice', n => notices.push(n.text));
+  const input = { sessionId: 'first', model: 'model', goal: 'Install nginx' };
+  assert.throws(() => f.automation.submit(input), { code: 'E-DELEGATION-NOT-ARMED' });
+  f.automation.arm(input); f.automation.arm(input); assert.equal(f.calls.length, 0); assert.equal(notices.length, 1);
+  f.automation.submit(input); await f.automation.running; assert.equal(f.automation.state().armed, true);
+  f.automation.submit({ ...input, goal: 'Version 1.28' }); await f.automation.running; assert.equal(f.calls.length, 2);
+  assert.equal(notices.filter(n => n.startsWith('위임 ON')).length, 1);
+  f.automation.stop(); assert.equal(f.automation.state().armed, false); assert.throws(() => f.automation.submit(input), { code: 'E-DELEGATION-NOT-ARMED' });
+});
+test('idle delegation mode is revoked on account and connection changes', t => {
+  const f = fixture(t, []); const input = { sessionId: 'first', model: 'model' };
+  f.automation.arm(input); f.auth.emit('change'); assert.equal(f.automation.state().armed, false);
+  f.ai.catalog = [{ slug: 'model' }]; f.automation.arm(input); f.target.generation = 'two'; f.ssh.emit('session', f.target); assert.equal(f.automation.state().armed, false);
+});
+test('masked command pauses delegation and never reaches the SSH shell', async t => {
+  const f = fixture(t, [{ action: 'run', summary: '연결', command: 'curl http://****/' }]); f.start(); await f.automation.running;
+  assert.deepEqual(f.commands, []); assert.equal(f.automation.state().reason, 'needs-input');
 });

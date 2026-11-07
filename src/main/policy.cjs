@@ -46,6 +46,7 @@ function inspectCommand(command) {
   if (typeof command !== 'string' || !command.trim() || Buffer.byteLength(command) > LIMITS.command) reasons.push('invalid-size');
   if (typeof command !== 'string') return { allowed: false, reasons, risks, safetyGuaranteed: false };
   if (/[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/.test(command) || !command.isWellFormed()) reasons.push('hidden-control-characters');
+  if (command.includes('****')) reasons.push('redacted-placeholder');
   if (/[\n]/.test(command)) risks.push('multiple-lines');
   if (/[;&|<>]/.test(command)) risks.push('compound-shell-command');
   if (/[$`]/.test(command)) risks.push('shell-expansion');
@@ -62,13 +63,39 @@ function inspectCommand(command) {
 function redactSecrets(input) {
   if (typeof input !== 'string' || Buffer.byteLength(input) > LIMITS.selection) fail('E-SHARE-SIZE');
   let count = 0;
-  const mask = () => { count++; return '[REDACTED]'; };
-  const value = input
+  const mask = () => { count++; return '****'; };
+  const secretName = /(?:password|passwd|passphrase|pwd|token|secret|api[_-]?key|access[_-]?key|session[_-]?(?:id|key)|client[_-]?key|private[_-]?key|signature|credential|authorization|cookie)(?:[_-]?(?:value|data|hash))?$/i;
+  const assignment = new RegExp(String.raw`(?<![\w.-])([A-Za-z_][A-Za-z0-9_.-]{0,127}|비밀번호|패스워드|API\s*키)(["']?\s*[=:]\s*)`, 'gi');
+  // Match names first: consuming an unrelated JSON string would hide nested log secrets.
+  let value = input;
+  const eligible = [];
+  for (const m of value.matchAll(assignment)) if (secretName.test(m[1]) || /^(비밀번호|패스워드|API\s*키)$/i.test(m[1])) eligible.push(m);
+  for (const m of eligible.reverse()) {
+    const start = m.index + m[0].length, rest = value.slice(start);
+    const token = /^(?:"(?:\\.|[^"\r\n])*"|'(?:\\.|[^'\r\n])*'|[^\s,;}\]\&"']+)/.exec(rest);
+    if (token && token[0] !== '****') value = value.slice(0, start) + mask() + rest.slice(token[0].length);
+  }
+  value = value
+    .replace(/(--(?:password|passwd|passphrase|token|secret|api[-_]key|access[-_]key|client[-_]secret))(?:=|\s+)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s;]+)/gi, (_, flag) => flag + '=' + mask())
+    .replace(/\b(sshpass\s+-p\s+)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s;]+)/gi, (_, prefix) => prefix + mask())
     .replace(/-----BEGIN (?:[A-Z0-9 ]* )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z0-9 ]* )?PRIVATE KEY-----|$)/g, mask)
-    .replace(/\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{16,}|AKIA[A-Z0-9]{16})\b/g, mask)
-    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, (_, p) => p + mask())
-    .replace(/\b(password|passwd|pwd|token|api[_-]?key|secret|access[_-]?key|client[_-]?secret)\b(\s*[=:]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/gi, (_, k, sep) => k + sep + mask())
-    .replace(/\b([a-z][a-z0-9+.-]*:\/\/[^\s/:]+:)[^\s/@]+(@)/gi, (_, before, after) => before + mask() + after);
+    .replace(/\b(?:sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{24,}|xox[baprs]-[A-Za-z0-9-]{10,}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{8,}|glpat-[A-Za-z0-9_-]{12,}|hf_[A-Za-z0-9]{16,})\b/g, mask)
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, mask)
+    .replace(/((?:proxy-)?authorization|set-cookie|cookie)(\s*:\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n]*)/gi, (_, key, sep) => key + sep + mask())
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, (_, prefix) => prefix + mask())
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/[^\s/:]+:)[^\s/@]+(@)/gi, (_, before, after) => before + mask() + after)
+    .replace(/\b(mysql|mariadb)([^\r\n]*?\s)(?:--password(?:=|\s+)|-p)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s;]+)/gi, (_, command, before) => command + before + '--password=' + mask());
+  value = value.replace(/[0-9a-fA-F:.]{2,80}(?:%[A-Za-z0-9_.-]{1,64})?/g, candidate => {
+    const zone = candidate.indexOf('%'), base = zone < 0 ? candidate : candidate.slice(0, zone);
+    if (!base.includes(':')) return candidate;
+    const leading = /^[.:]*/.exec(base)[0].length, trailing = /[.:]*$/.exec(base)[0].length;
+    for (let left = 0; left <= leading; left++) for (let right = 0; right <= trailing; right++) {
+      const end = base.length - right; if (end <= left) continue;
+      if (net.isIP(base.slice(left, end)) === 6) return base.slice(0, left) + mask() + base.slice(end);
+    }
+    return candidate;
+  });
+  value = value.replace(/(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9.])/g, candidate => net.isIP(candidate) === 4 ? mask() : candidate);
   return { text: value, redactions: count, reviewRequired: true, completeDetection: false };
 }
 module.exports = { LIMITS, fail, validateProfile, validateCredentials, inspectCommand, redactSecrets };

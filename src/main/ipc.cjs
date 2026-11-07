@@ -39,6 +39,8 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, ap
       validateProfile(profile); validateCredentials(credentials);
       if (credentials?.type === 'privateKey' && !keys.has(credentials.privateKeyPath)) fail('E-IPC-KEY');
       if (typeof save !== 'boolean') fail('E-IPC-INPUT');
+      ai.rememberSecret?.(credentials.password); ai.rememberSecret?.(credentials.passphrase);
+      if (require('node:net').isIP(profile.host)) ai.rememberSecret?.(profile.host);
       attempts.set(attemptId, { profile, credentials, save, cancelled: false });
       return { attemptId };
     },
@@ -67,12 +69,12 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, ap
     rotateConfirm: ({ token, verified }) => { const r = rotations.get(token); rotations.delete(token); if (!r || verified !== true) fail('E-SSH-HOSTKEY-ANSWER'); return store.rotateHost(r.old, r.next); },
     deleteProfile: id => { if (typeof id !== 'string') fail('E-IPC-INPUT'); return store.deleteProfile(id); },
     hostKey: ({ id, trust }) => { if (typeof id !== 'string' || typeof trust !== 'boolean') fail('E-IPC-INPUT'); return ssh.answerHostKey(id, trust); },
-    write: ({ id, data }) => { current(id); const locked = ssh.listSessions().some(s => s.sessionId === id && s.terminalInputLocked); if (locked) { if (data !== '\x03') fail('E-TERM-AI-BUSY'); automation.stop('manual-takeover'); return ssh.takeControl(id); } if (automation.grant && data !== '') automation.stop('manual-takeover'); return ssh.write(id, data); },
+    write: ({ id, data }) => { current(id); const locked = ssh.listSessions().some(s => s.sessionId === id && s.terminalInputLocked); if (locked) { if (data !== '\x03') fail('E-TERM-AI-BUSY'); automation.stop('manual-takeover'); return ssh.takeControl(id); } if ((automation.grant || automation.armed) && data !== '') automation.stop('manual-takeover'); return ssh.write(id, data); },
     takeControl: id => { current(id); automation.stop('manual-takeover'); return ssh.takeControl(id); },
     resize: ({ id, cols, rows }) => ssh.resize(id, cols, rows),
     pastePreview: ({ id, data }) => pastePreview(id, data),
     clipboardPastePreview: async id => { current(id); if (!ssh.listSessions().some(s => s.sessionId === id && s.status === 'connected')) fail('E-SSH-NOT-CONNECTED'); let data; try { data = await clipboard.readText(); } catch { fail('E-CLIPBOARD-READ'); } return pastePreview(id, data); },
-    paste: token => { const p = pastes.get(token); pastes.delete(token); if (!p) fail('E-TERM-STALE'); current(p.id); if (!ssh.listSessions().some(s => s.sessionId === p.id && s.status === 'connected' && s.generation === p.generation)) fail('E-TERM-STALE'); if (ssh.listSessions().some(s => s.sessionId === p.id && s.terminalInputLocked)) fail('E-TERM-AI-BUSY'); if (automation.grant) automation.stop('manual-takeover'); return ssh.write(p.id, p.data); },
+    paste: token => { const p = pastes.get(token); pastes.delete(token); if (!p) fail('E-TERM-STALE'); current(p.id); if (!ssh.listSessions().some(s => s.sessionId === p.id && s.status === 'connected' && s.generation === p.generation)) fail('E-TERM-STALE'); if (ssh.listSessions().some(s => s.sessionId === p.id && s.terminalInputLocked)) fail('E-TERM-AI-BUSY'); if (automation.grant || automation.armed) automation.stop('manual-takeover'); return ssh.write(p.id, p.data); },
     terminalContextMenu: ({ id, selection = '' }) => {
       current(id); if (typeof selection !== 'string' || Buffer.byteLength(selection) > 1048576 || !Menu) fail('E-IPC-INPUT');
       const connected = ssh.listSessions().some(s => s.sessionId === id && s.status === 'connected');
@@ -90,6 +92,8 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, ap
     directSend: input => { manual(); current(input?.sessionId); if (previewEnabled) fail('E-AI-REVIEW-REQUIRED'); const preview = ai.preview(input); publish('manual-question', { sessionId: input.sessionId, text: preview.request.payload.input.at(-1).content }); return ai.send(preview.token); },
     advicePrepare: input => { manual(); current(input?.sessionId); return advice.prepare(input); },
     adviceEnable: token => advice.enable(token), adviceStop: () => advice.stop(),
+    delegationArm: input => { current(input?.sessionId); const result = automation.arm(input); advice.stop('delegated'); return result; },
+    delegationSubmit: input => { current(input?.sessionId); return automation.submit(input); },
     delegationPrepare: input => { current(input?.sessionId); return automation.prepare(input); },
     delegationStart: token => { const result = automation.start(token); advice.stop('delegated'); return result; },
     delegationStop: () => automation.stop(),

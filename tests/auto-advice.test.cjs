@@ -27,7 +27,7 @@ test('automatic advice requires a fresh consent binding and excludes output befo
   f.output('ERROR password=private-secret'); await f.advice.flush();
   assert.equal(f.calls.length, 1); const payload = JSON.stringify(f.calls[0]);
   for (const forbidden of ['before consent', 'consent dialog', 'other session', 'old generation', 'private-secret']) assert.ok(!payload.includes(forbidden), forbidden);
-  assert.match(payload, /password=\[REDACTED\]/); assert.equal(f.calls[0].tools, undefined);
+  assert.match(payload, /password=\*{4}/); assert.equal(f.calls[0].tools, undefined);
   assert.equal(f.ssh.executions.size, 0);
 });
 test('automatic advice bounds output and rate but continues beyond ten turns without repeating old output', async t => {
