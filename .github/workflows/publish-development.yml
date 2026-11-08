@@ -5,11 +5,11 @@ on:
     inputs:
       candidate_run:
         description: Successful Development installers run ID
-        default: '42403137002'
+        default: '42439022001'
         required: true
       source_sha:
         description: Exact verified source commit
-        default: '72c11a6947da613507b759c89123cd291dc64a32'
+        default: 'b53b024458d0fe837d9594fd12ea0e8184c728b8'
         required: true
   push:
     branches: [main]
@@ -28,8 +28,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      CANDIDATE_RUN: ${{ inputs.candidate_run || '42403137002' }}
-      SOURCE_SHA: ${{ inputs.source_sha || '72c11a6947da613507b759c89123cd291dc64a32' }}
+      CANDIDATE_RUN: ${{ inputs.candidate_run || '42439022001' }}
+      SOURCE_SHA: ${{ inputs.source_sha || 'b53b024458d0fe837d9594fd12ea0e8184c728b8' }}
     steps:
       - name: 검증된 빌드 출처 확인
         shell: bash
@@ -96,13 +96,13 @@ jobs:
           모든 파일은 분할하지 않은 원본 설치파일입니다. `SHA256SUMS.txt`로 무결성을 확인할 수 있습니다.
 
           ## 변경 사항
-          - AI 권한 ON에서 OpenAI Responses API 함수 도구로 작업 목록·SSH 실행·완료 보고를 처리
-          - 각 명령의 실제 종료 상태와 민감정보를 가린 출력을 확인한 뒤 다음 작업을 결정
-          - 재부팅 필요 여부를 확인하는 `reboot-required` 파일을 재부팅 명령으로 오인하던 문제 해결
-          - 점검·설치·업데이트·취약점 검사·보안 패치 요청을 같은 채팅에서 순차 처리
-          - 기존 민감정보 가림, 공유 SSH 터미널, 3초 상태 확인, 연결별 권한 경계 유지
+          - SSH에 연결해 채팅하면 별도의 위임·AI 권한 버튼 없이 서버 AI가 질문에 답하고 요청한 작업을 순서대로 수행
+          - OpenAI Responses API 함수 도구로 작업 목록, SSH 명령 실행, 종료 결과 확인, 완료 보고 처리
+          - 실행 중 SSH 출력과 상태를 3초마다 관찰하고 완료가 확인되면 다음 작업으로 진행
+          - 연결된 서버 주소와 탐지 가능한 비밀번호·키·토큰을 AI 전송 전에 로컬에서 가림; 다른 IP는 진단에 활용
+          - `****`가 포함된 명령은 실행하지 않으며 응답 취소·직접 조작으로 현재 작업을 멈출 수 있음
 
-          AI 권한 ON은 현재 SSH 세션에서 AI가 요청한 작업을 실행할 수 있게 합니다. 탭·계정·모델·연결 변경 시 권한 바인딩을 해제합니다. 실제 서버의 명령 효과와 목표 달성 여부를 완벽히 보장할 수 없습니다.
+          서버 AI는 현재 SSH 계정 권한으로 요청한 작업을 실행합니다. 가림으로 모든 비밀 유출이나 명령의 부작용을 막을 수는 없습니다. 실제 서버의 목표 달성 여부는 결과를 확인해야 합니다.
 
           ## 개발용 사전 릴리스
           정식 Windows 인증서 서명과 Apple 공증은 적용되지 않았습니다. Mac 앱은 개발용 ad-hoc 서명입니다. OS 보안 정책에 따라 실행이 제한될 수 있으며 이 개발 빌드에서는 자동 업데이트를 설치하지 않습니다. 실제 계정의 OAuth 동의·플랜 권한·외부 AI 응답은 추가 확인 대상입니다.
