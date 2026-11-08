@@ -60,7 +60,7 @@ function inspectCommand(command) {
   return { allowed: reasons.length === 0, reasons, risks, safetyGuaranteed: false, externalTransfer: transfer ? true : null,
     limitations: ['Server executables and login startup configuration can have side effects.', 'No interactive-shell directory or environment is inherited.', 'Interactive input is unavailable in a separate execution channel; use the terminal for interactive commands.'] };
 }
-function redactSecrets(input) {
+function redactSecrets(input, { maskAllIPs = false } = {}) {
   if (typeof input !== 'string' || Buffer.byteLength(input) > LIMITS.selection) fail('E-SHARE-SIZE');
   let count = 0;
   const mask = () => { count++; return '****'; };
@@ -85,7 +85,7 @@ function redactSecrets(input) {
     .replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, (_, prefix) => prefix + mask())
     .replace(/\b([a-z][a-z0-9+.-]*:\/\/[^\s/:]+:)[^\s/@]+(@)/gi, (_, before, after) => before + mask() + after)
     .replace(/\b(mysql|mariadb)([^\r\n]*?\s)(?:--password(?:=|\s+)|-p)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s;]+)/gi, (_, command, before) => command + before + '--password=' + mask());
-  value = value.replace(/[0-9a-fA-F:.]{2,80}(?:%[A-Za-z0-9_.-]{1,64})?/g, candidate => {
+  if (maskAllIPs) value = value.replace(/[0-9a-fA-F:.]{2,80}(?:%[A-Za-z0-9_.-]{1,64})?/g, candidate => {
     const zone = candidate.indexOf('%'), base = zone < 0 ? candidate : candidate.slice(0, zone);
     if (!base.includes(':')) return candidate;
     const leading = /^[.:]*/.exec(base)[0].length, trailing = /[.:]*$/.exec(base)[0].length;
@@ -95,7 +95,7 @@ function redactSecrets(input) {
     }
     return candidate;
   });
-  value = value.replace(/(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9.])/g, candidate => net.isIP(candidate) === 4 ? mask() : candidate);
+  if (maskAllIPs) value = value.replace(/(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9.])/g, candidate => net.isIP(candidate) === 4 ? mask() : candidate);
   return { text: value, redactions: count, reviewRequired: true, completeDetection: false };
 }
 module.exports = { LIMITS, fail, validateProfile, validateCredentials, inspectCommand, redactSecrets };

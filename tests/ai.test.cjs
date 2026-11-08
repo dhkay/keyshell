@@ -170,15 +170,26 @@ test('review: logout still revokes after local clear persistence failure and rep
   }
 });
 
-test('all outbound chat/history/log content is masked before fetch, with exact preview bytes', async t => {
-  const f = await aiFixture(t); const known = 'unlabelled-F!x192.0.2.73"한글'; f.ai.rememberSecret(known);
+test('connected host and credentials are masked while other IPs remain visible', async t => {
+  const f = await aiFixture(t); const known = 'unlabelled-F!x192.0.2.73"한글'; f.ai.rememberSecret(known); f.ai.protectHost('tab-a', '192.0.2.1');
   f.ai.sessions.set('tab-a', { model: 'allowed', history: [{ role: 'user', content: 'old 2001:db8::a' }, { role: 'assistant', content: 'echo ' + known }] });
   const fixture = JSON.stringify([{ output: 'failed password=PRIVATE_LOG_VALUE host=192.0.2.1', token: 'PRIVATE_SESSION_VALUE' }]);
   const p = f.preview({ question: known + ' ' + encodeURIComponent(known), attachments: [{ source: 'log', text: fixture }] });
   const expected = JSON.stringify(p.request.payload); await f.ai.send(p.token);
   const body = f.inferenceCalls[0].init.body; assert.equal(body, expected);
-  for (const value of [known, encodeURIComponent(known), 'PRIVATE_LOG_VALUE', 'PRIVATE_SESSION_VALUE', '192.0.2.1', '2001:db8::a', 'F!x']) assert.ok(!body.includes(value), value);
+  for (const value of [known, encodeURIComponent(known), 'PRIVATE_LOG_VALUE', 'PRIVATE_SESSION_VALUE', '192.0.2.1', 'F!x']) assert.ok(!body.includes(value), value);
+  assert.match(body, /2001:db8::a/);
   assert.match(body, /\*{4}/);
+});
+test('session host masking covers resolved and normalized addresses without hiding unrelated peers', async t => {
+  const f = await aiFixture(t);
+  f.ai.protectHost('tab-a', ['server.example', '2001:0db8:0000:0000:0000:0000:0000:0001']);
+  const p = f.preview({ question: 'server.example [2001:db8::1]:22 peer 198.51.100.8' });
+  const body = JSON.stringify(p.request.payload);
+  assert.doesNotMatch(body, /server\.example|2001:db8::1/);
+  assert.match(body, /198\.51\.100\.8/);
+  f.ai.resetSession('tab-a');
+  assert.equal(f.ai.protectedHosts.has('tab-a'), false);
 });
 test('learning a secret invalidates previews and blocks queued requests before any HTTP transmission', async t => {
   const f = await aiFixture(t); const p = f.preview({ question: 'unlabelled-new-value' });

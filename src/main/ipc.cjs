@@ -40,7 +40,6 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, ap
       if (credentials?.type === 'privateKey' && !keys.has(credentials.privateKeyPath)) fail('E-IPC-KEY');
       if (typeof save !== 'boolean') fail('E-IPC-INPUT');
       ai.rememberSecret?.(credentials.password); ai.rememberSecret?.(credentials.passphrase);
-      if (require('node:net').isIP(profile.host)) ai.rememberSecret?.(profile.host);
       attempts.set(attemptId, { profile, credentials, save, cancelled: false });
       return { attemptId };
     },
@@ -53,6 +52,7 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, ap
         const promise = ssh.connect(profile, attempt.credentials); startingAttempt = null; attempt.credentials = null;
         const result = await promise;
         if (attempt.cancelled) { ssh.disconnect(result.sessionId); fail('E-SSH-CONNECT-CANCELLED'); }
+        ai.protectHost?.(result.sessionId, [profile.host, result.remoteAddress].filter(Boolean));
         return result;
       } finally { startingAttempt = null; attempt.credentials = null; attempts.delete(id); }
     },
@@ -93,13 +93,13 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, ap
     advicePrepare: input => { manual(); current(input?.sessionId); return advice.prepare(input); },
     adviceEnable: token => advice.enable(token), adviceStop: () => advice.stop(),
     delegationArm: input => { current(input?.sessionId); const result = automation.arm(input); advice.stop('delegated'); return result; },
-    delegationSubmit: input => { current(input?.sessionId); return automation.submit(input); },
+    delegationSubmit: input => { current(input?.sessionId); advice.stop('server-agent'); return automation.submit(input); },
     delegationPrepare: input => { current(input?.sessionId); return automation.prepare(input); },
     delegationStart: token => { const result = automation.start(token); advice.stop('delegated'); return result; },
     delegationStop: () => automation.stop(),
     preview: input => { manual(); current(input?.sessionId); return ai.preview(input); },
     send: token => { manual(); return ai.send(token); }, invalidate: () => invalidate(),
-    reset: id => { current(id); automation.stop('conversation-reset'); automation.clearChat(id); advice.stop('conversation-reset'); invalidate(); return ai.resetSession(id); }, cancelAI: id => { automation.stop('cancelled'); advice.stop('cancelled'); return ai.cancel(id); },
+    reset: id => { current(id); automation.stop('conversation-reset'); automation.clearChat(id); advice.stop('conversation-reset'); invalidate(); ai.resetSession(id); const session = ssh.listSessions().find(s => s.sessionId === id && s.status === 'connected'); if (session) ai.protectHost(id, [session.host, session.remoteAddress].filter(Boolean)); }, cancelAI: id => { automation.stop('cancelled'); advice.stop('cancelled'); return ai.cancel(id); },
     execution: ({ id, command }) => { manual(); current(id); return ssh.prepareExecution(id, command); },
     approve: input => { const token = typeof input === 'string' ? input : input?.token; const followUp = typeof input === 'object' && input?.followUp === true; const id = ssh.tokens.get(token), e = ssh.executions.get(id); if (!e) fail('E-EXEC-STALE'); current(e.sessionId); return automation.approve(token, followUp); },
     cancelExecution: id => { if (automation.grant?.executionId === id) automation.stop('cancelled'); return ssh.cancelExecution(id); },

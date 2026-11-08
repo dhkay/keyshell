@@ -48,6 +48,7 @@ test('desktop UI: actual SSH, trust, selection, masked sharing, exec, paste and 
     await page.mouse.move(box.x + 2, box.y + 24); await page.mouse.down(); await page.mouse.move(box.x + Math.min(480, box.width - 8), box.y + 44); await page.mouse.up();
     await page.locator('#selection-tools:not([hidden])').waitFor(); await page.getByRole('button', { name: 'Send to AI', exact: true }).click();
     await page.getByLabel('Ask about this session').fill('OS form clipboard'); await page.keyboard.press('ControlOrMeta+a'); await page.keyboard.press('ControlOrMeta+c'); assert.equal(await app.evaluate(({ clipboard }) => clipboard.readText()), 'OS form clipboard'); await app.evaluate(({ clipboard }) => clipboard.writeText('pasted form')); await page.keyboard.press('ControlOrMeta+v'); assert.equal(await page.getByLabel('Ask about this session').inputValue(), 'pasted form');
+    if (await page.locator('#preview-toggle').getAttribute('aria-pressed') === 'false') await page.locator('#preview-toggle').click();
     await page.getByLabel('Ask about this session').fill('Why did nginx fail? password=private'); await page.getByRole('button', { name: 'Preview message' }).click();
     await page.getByRole('button', { name: 'Send confirmed request' }).waitFor();
     const request = await page.getByLabel('Complete AI request').textContent(); assert.match(request, /\*{4}/); assert.doesNotMatch(request, /password=private/);
@@ -296,10 +297,10 @@ test('AI sharing modes: Enter sends once, IME and Shift+Enter do not send, auto 
     await app.evaluate(({ app }) => { app.__holdNextSharingResponse = true; });
     await page.locator('#advice-toggle').click(); await page.getByLabel('이 세션의 새 출력을 ChatGPT에 자동 공유하는 데 동의합니다', { exact: true }).check(); await page.getByRole('button', { name: '동의하고 켜기', exact: true }).click();
     shellStream.write('HOLD_AUTOMATIC_RESPONSE\r\n'); await page.locator('#cancel-ai').waitFor({ state: 'visible' });
-    assert.equal(await page.locator('#send-message').isDisabled(), true);
+    assert.equal(await page.locator('#advice-toggle').getAttribute('aria-pressed'), 'true');
     await page.locator('#advice-toggle').click(); await page.waitForFunction(() => !document.getElementById('send-message').disabled);
     assert.equal((await payloads()).length, 4);
-    await input.fill('중지 후 수동 질문'); await input.press('Enter'); await page.waitForFunction(() => document.querySelectorAll('#messages .answer').length === 2); assert.equal((await payloads()).length, 5);
+    await input.fill('중지 후 수동 질문'); await input.press('Enter'); await page.waitForFunction(() => document.querySelectorAll('#messages .answer').length >= 2); assert.equal((await payloads()).length, 5);
     await app.evaluate(({ app }) => { app.__holdNextSharingResponse = true; });
     await page.locator('#advice-toggle').click(); await page.getByLabel('이 세션의 새 출력을 ChatGPT에 자동 공유하는 데 동의합니다', { exact: true }).check(); await page.getByRole('button', { name: '동의하고 켜기', exact: true }).click();
     shellStream.write('HOLD_BEFORE_TAB_CHANGE\r\n'); await page.locator('#cancel-ai').waitFor({ state: 'visible' });
@@ -309,7 +310,7 @@ test('AI sharing modes: Enter sends once, IME and Shift+Enter do not send, auto 
     await app.evaluate(({ app }) => { app.__holdNextSharingToken = true; });
     await input.fill('인증 대기 중 취소할 질문'); await input.press('Enter'); await page.locator('#cancel-ai').waitFor({ state: 'visible' });
     await page.locator('#cancel-ai').click(); await page.waitForFunction(() => !document.getElementById('send-message').disabled);
-    await input.fill('취소 직후 새 질문'); await input.press('Enter'); await page.waitForFunction(() => document.querySelectorAll('#messages .answer').length === 3);
+    await input.fill('취소 직후 새 질문'); await input.press('Enter'); await page.waitForFunction(() => document.querySelectorAll('#messages .answer').length >= 3);
     assert.equal((await payloads()).length, 7);
     await app.evaluate(({ app }) => app.__releaseSharingToken?.('late-cancelled-token')); await page.waitForTimeout(100); assert.equal((await payloads()).length, 7);
     assert.deepEqual(errors, []);
@@ -356,7 +357,7 @@ test('terminal clipboard and reviewed commands: real OS paste shortcuts, right c
     await app.evaluate(({ clipboard }) => clipboard.writeText(' paste-button')); await page.locator('#terminal-paste').click(); expected += ' paste-button'; await waitInput(expected);
     assert.ok(!inputs.join('').includes('\x16')); assert.ok(!inputs.join('').includes('\r')); assert.ok(!inputs.join('').includes('\n')); assert.deepEqual(commands, []);
     await app.evaluate(({ clipboard }) => clipboard.writeText('echo first\necho second\n')); await terminal.focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+v' : 'Control+v'); await page.getByRole('heading', { name: 'Confirm terminal paste', exact: true }).waitFor(); assert.equal(inputs.join(''), expected); await page.getByRole('button', { name: 'Cancel', exact: true }).click(); assert.equal(inputs.join(''), expected);
-    await page.getByLabel('Ask about this session').fill('PHP 버전을 확인해줘'); await page.getByLabel('Ask about this session').press('Enter'); await page.getByRole('button', { name: 'Review & run', exact: true }).waitFor();
+    await page.locator('#preview-toggle').click(); await page.getByLabel('Ask about this session').fill('PHP 버전을 확인해줘'); await page.getByLabel('Ask about this session').press('Enter'); await page.getByRole('button', { name: 'Send confirmed request', exact: true }).click(); await page.getByRole('button', { name: 'Review & run', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Review & run', exact: true }).click(); const approve = page.getByRole('button', { name: 'Approve & run once', exact: true }); assert.equal(await approve.isEnabled(), true); assert.ok(!(await page.locator('#modal-body').textContent()).includes('Execution blocked')); await approve.click();
     await page.waitForFunction(() => /PHP 8.5.0/.test(document.getElementById('executions').textContent) && /completed/.test(document.getElementById('executions').textContent)); assert.deepEqual(commands, ['php-fpm8.5 -v']);
     await page.getByRole('button', { name: '터미널에 넣기', exact: true }).first().click(); expected += 'php-fpm8.5 -v'; await waitInput(expected); assert.deepEqual(commands, ['php-fpm8.5 -v']);
@@ -394,7 +395,7 @@ test('delegation and chat scroll: held reading position, empty Enter, result fol
       AIService.prototype.preview = function(...args) {
         if (!this.__automationFixture) { this.__automationFixture = true; this.fetch = async (_url, options) => {
           const payload = JSON.parse(options.body); app.__automationPayloads.push(payload);
-          const delegated = payload.instructions.includes('user-delegated');
+          const delegated = payload.instructions.includes('server operations expert');
           let text = delegated ? JSON.stringify(app.__delegationSteps.shift()) : payload.input.at(-1).content.includes('최종 실행 결과') ? 'PHP 결과를 확인했습니다. 다음은 nginx 설정 검사입니다.\n```sh\nnginx -t\n```' : Array.from({ length: 60 }, (_, i) => '읽을 내용 ' + i).join('\n');
           return { ok: true, body: (async function* () {
             const delta = value => Buffer.from('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: value }) + '\n\n');
@@ -406,7 +407,7 @@ test('delegation and chat scroll: held reading position, empty Enter, result fol
       };
     }, require.resolve('../src/main/ai-service.cjs'));
     await page.locator('[data-new]').first().click(); await page.getByLabel('Connection name', { exact: true }).fill('Delegation SSH'); await page.getByLabel('Host', { exact: true }).fill('127.0.0.1'); await page.getByLabel('Port', { exact: true }).fill(String(server.address().port)); await page.getByLabel('Username', { exact: true }).fill('tester'); await page.getByLabel('Password', { exact: true }).fill('test-only'); await page.getByRole('button', { name: 'Connect', exact: true }).click(); await page.getByRole('button', { name: 'Trust & connect' }).click(); await page.locator('#connection-state').filter({ hasText: /^connected$/ }).waitFor();
-    const input = page.getByLabel('Ask about this session'); await input.fill('상태 확인'); await input.press('Enter'); await page.locator('#messages .answer').filter({ hasText: '읽을 내용 59' }).waitFor();
+    const input = page.getByLabel('Ask about this session'); await page.locator('#preview-toggle').click(); await input.fill('상태 확인'); await input.press('Enter'); await page.getByRole('button', { name: 'Send confirmed request', exact: true }).click(); await page.locator('#messages .answer').filter({ hasText: '읽을 내용 59' }).waitFor();
     const box = await page.locator('#messages').boundingBox(); await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.wheel(0, -10000); await page.waitForFunction(() => document.getElementById('messages').scrollTop < 5);
     await app.evaluate(({ app }) => app.__continueChat()); await page.getByRole('button', { name: 'Review & run', exact: true }).waitFor(); assert.ok(await page.locator('#messages').evaluate(n => n.scrollTop < 5));
     await input.press('Enter'); await page.waitForFunction(() => { const n = document.getElementById('messages'); return n.scrollHeight - n.clientHeight - n.scrollTop < 5; });
@@ -414,26 +415,19 @@ test('delegation and chat scroll: held reading position, empty Enter, result fol
     await page.getByRole('button', { name: 'Review & run', exact: true }).click(); assert.equal(await page.getByLabel('실행 결과를 AI에 보내고 다음 작업 제안 받기', { exact: true }).isChecked(), true); await page.getByRole('button', { name: 'Approve & run once', exact: true }).click();
     await page.locator('#messages .answer').filter({ hasText: 'PHP 결과를 확인했습니다' }).waitFor(); assert.deepEqual(commands, ['php -v']);
     let payloads = await app.evaluate(({ app }) => app.__automationPayloads); assert.match(JSON.stringify(payloads[1]), /PHP 8.5/); assert.match(JSON.stringify(payloads[1]), /completed/);
-    const begin = async goal => {
-      if (await page.locator('#delegation-toggle').getAttribute('aria-pressed') === 'false') {
-        const before = await app.evaluate(({ app }) => app.__automationPayloads.length);
-        await page.locator('#delegation-toggle').click();
-        assert.equal(await page.locator('#modal').evaluate(n => n.open), false);
-        assert.equal(await app.evaluate(({ app }) => app.__automationPayloads.length), before);
-      }
-      await input.fill(goal); await input.press('Enter');
-      assert.equal(await page.locator('#modal').evaluate(n => n.open), false);
-    };
+    await page.locator('#preview-toggle').click();
+    assert.equal(await page.locator('#delegation-toggle').count(), 0);
+    const begin = async goal => { await input.fill(goal); await input.press('Enter'); assert.equal(await page.locator('#modal').evaluate(n => n.open), false); };
     await begin('nginx PHP MariaDB 설치 확인'); await page.locator('#delegation-status').filter({ hasText: '목표 완료' }).waitFor(); assert.deepEqual(commands, ['php -v', 'cat /etc/os-release', 'nginx -v && php -v && mariadb --version']);
-    payloads = await app.evaluate(({ app }) => app.__automationPayloads); assert.match(JSON.stringify(payloads[4]), /Ubuntu fixture/); assert.match(JSON.stringify(payloads[5]), /MariaDB 11/); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'true');
+    payloads = await app.evaluate(({ app }) => app.__automationPayloads); assert.match(JSON.stringify(payloads[4]), /Ubuntu fixture/); assert.match(JSON.stringify(payloads[5]), /MariaDB 11/); assert.equal(await page.locator('#delegation-toggle').count(), 0);
     await app.evaluate(({ app }) => { app.__delegationSteps = [{ action: 'reply', summary: '질문에 답했습니다. 서버 작업은 실행하지 않았습니다.', command: '' }]; });
     await input.fill('이 작업은 어떤 의미야?'); await input.press('Enter'); await page.locator('#messages').filter({ hasText: '서버 작업은 실행하지 않았습니다.' }).waitFor(); assert.equal(commands.length, 3);
     await app.evaluate(({ app }) => { app.__delegationSteps = [{ action: 'plan', summary: '작업 순서', command: '', tasks: ['대기 작업 확인'] }, { action: 'run', summary: '중지 검사', command: 'sleep 99' }, { action: 'run', summary: '실행되면 안 됨', command: 'whoami' }]; });
-    await begin('대기 작업 검사'); await page.locator('#delegation-status').filter({ hasText: '명령 실행 중' }).waitFor(); await page.locator('#delegation-toggle').click(); await page.locator('#delegation-status').filter({ hasText: '사용자가 중지함' }).waitFor(); await page.waitForTimeout(150); assert.deepEqual(commands, ['php -v', 'cat /etc/os-release', 'nginx -v && php -v && mariadb --version', 'sleep 99']);
-    await page.locator('#delegation-toggle').click(); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'true');
-    await page.locator('#model').selectOption('fixture-alternate'); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'false');
-    await page.locator('#delegation-toggle').click(); await page.getByRole('button', { name: 'General conversation', exact: true }).click(); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'false');
-    await page.getByRole('button', { name: 'Delegation SSH', exact: true }).last().click(); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'false');
+    await begin('대기 작업 검사'); await page.locator('#delegation-status').filter({ hasText: '명령 실행 중' }).waitFor(); await page.locator('#cancel-ai').click(); await page.locator('#delegation-status').filter({ hasText: '응답을 취소' }).waitFor(); await page.waitForTimeout(150); assert.deepEqual(commands, ['php -v', 'cat /etc/os-release', 'nginx -v && php -v && mariadb --version', 'sleep 99']);
+    await page.locator('#model').selectOption('fixture-alternate');
+    await page.getByRole('button', { name: 'General conversation', exact: true }).click();
+    await page.getByRole('button', { name: 'Delegation SSH', exact: true }).last().click();
+    assert.equal(await page.locator('#delegation-toggle').count(), 0);
     await page.screenshot({ path: path.resolve('docs/verification/desktop/delegation.png') }); assert.deepEqual(errors, []);
   } finally { for (const client of clients) { client.end(); client._sock?.destroy(); } if (app) { await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); }).catch(() => {}); await app.close().catch(() => {}); } await new Promise(resolve => server.close(resolve)); fs.rmSync(directory, { recursive: true, force: true }); }
 });
@@ -476,12 +470,12 @@ test('shared terminal: manual and AI use one visible PTY, preserve context and a
     const page = await app.firstWindow(), errors = []; page.on('pageerror', e => errors.push(e.message)); await page.locator('#auth-state').filter({ hasText: 'DEVELOPMENT FIXTURE' }).waitFor();
     await app.evaluate(({ app }, modulePath) => {
       const { AIService } = process.mainModule.require(modulePath), original = AIService.prototype.preview; app.__sharedPayloads = []; app.__sharedSteps = [ { action: 'plan', summary: '작업 순서', command: '', tasks: ['현재 경로', '대기 작업'] }, { action: 'run', summary: '현재 경로 확인', command: 'pwd' }, { action: 'run', task: 2, summary: '조작권 전환 확인', command: 'sleep 99' }, { action: 'run', summary: '실행되면 안 됨', command: 'whoami' } ];
-      AIService.prototype.preview = function(...args) { if (!this.__sharedFixture) { this.__sharedFixture = true; this.fetch = async (_url, options) => { const payload = JSON.parse(options.body); app.__sharedPayloads.push(payload); if (app.__sharedHoldNext && payload.instructions.includes('user-delegated')) { app.__sharedHoldNext = false; app.__sharedPlanningEntered?.(); return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => { app.__sharedPlanningCancelled = true; reject(new Error('cancelled fixture')); }, { once: true })); } const text = payload.instructions.includes('user-delegated') ? JSON.stringify(app.__sharedSteps.shift()) : payload.input.at(-1).content.includes('최종 실행 결과') ? '공유 터미널의 결과를 확인했습니다.' : '```sh\npwd\n```'; return { ok: true, body: (async function* () { yield Buffer.from('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: text }) + '\n\ndata: {"type":"response.completed"}\n\n'); })() }; }; } return original.apply(this, args); };
+      AIService.prototype.preview = function(...args) { if (!this.__sharedFixture) { this.__sharedFixture = true; this.fetch = async (_url, options) => { const payload = JSON.parse(options.body); app.__sharedPayloads.push(payload); if (app.__sharedHoldNext && payload.instructions.includes('server operations expert')) { app.__sharedHoldNext = false; app.__sharedPlanningEntered?.(); return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => { app.__sharedPlanningCancelled = true; reject(new Error('cancelled fixture')); }, { once: true })); } const text = payload.instructions.includes('server operations expert') ? JSON.stringify(app.__sharedSteps.shift()) : payload.input.at(-1).content.includes('최종 실행 결과') ? '공유 터미널의 결과를 확인했습니다.' : '```sh\npwd\n```'; return { ok: true, body: (async function* () { yield Buffer.from('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: text }) + '\n\ndata: {"type":"response.completed"}\n\n'); })() }; }; } return original.apply(this, args); };
     }, require.resolve('../src/main/ai-service.cjs'));
     await page.locator('[data-new]').first().click(); await page.getByLabel('Connection name', { exact: true }).fill('Shared PTY'); await page.getByLabel('Host', { exact: true }).fill('127.0.0.1'); await page.getByLabel('Port', { exact: true }).fill(String(server.address().port)); await page.getByLabel('Username', { exact: true }).fill('tester'); await page.getByLabel('Password', { exact: true }).fill('test-only'); await page.getByRole('button', { name: 'Connect', exact: true }).click(); await page.getByRole('button', { name: 'Trust & connect' }).click();
     const ready = () => page.locator('#terminal-owner').filter({ hasText: '함께 쓰는 터미널' }).waitFor(); await ready();
     const terminal = page.locator('.terminal-pane:not([hidden]) textarea'); await terminal.focus(); await page.keyboard.type('cd /srv/app'); await page.keyboard.press('Enter'); await ready();
-    const question = page.getByLabel('Ask about this session'); await question.fill('현재 경로 확인'); await question.press('Enter'); await page.getByRole('button', { name: 'Review & run', exact: true }).click(); assert.match(await page.locator('#modal-body').textContent(), /현재 화면의 SSH 터미널/); await page.getByRole('button', { name: 'Approve & run once', exact: true }).click();
+    const question = page.getByLabel('Ask about this session'); await page.locator('#preview-toggle').click(); await question.fill('현재 경로 확인'); await question.press('Enter'); await page.getByRole('button', { name: 'Send confirmed request', exact: true }).click(); await page.getByRole('button', { name: 'Review & run', exact: true }).click(); assert.match(await page.locator('#modal-body').textContent(), /현재 화면의 SSH 터미널/); await page.getByRole('button', { name: 'Approve & run once', exact: true }).click();
     await page.locator('#messages .answer').filter({ hasText: '공유 터미널의 결과' }).waitFor(); await ready();
     assert.equal(await page.locator('#executions').isVisible(), false); await page.waitForFunction(() => document.querySelector('.terminal-pane:not([hidden]) .xterm-rows').textContent.includes('/srv/app'));
     const state = await page.evaluate(() => window.keyshell.call('state')), id = state.sessions[0].sessionId;
@@ -490,16 +484,16 @@ test('shared terminal: manual and AI use one visible PTY, preserve context and a
     const run = async command => { await page.evaluate(async ({ id, command }) => { const e = await window.keyshell.call('execution', { id, command }); await window.keyshell.call('approve', e.token); }, { id, command }); await ready(); };
     await run('cd /srv/ai; export KEYSHELL_UI_SHARED=ai'); await run('printf "%s" "$KEYSHELL_UI_SHARED"');
     await terminal.focus(); await page.keyboard.type('pwd'); await page.keyboard.press('Enter'); await ready(); await page.waitForFunction(() => document.querySelector('.terminal-pane:not([hidden]) .xterm-rows').textContent.includes('/srv/ai'));
-    await page.locator('#delegation-toggle').click(); await question.fill('현재 경로를 확인하고 대기 작업을 실행해줘'); await question.press('Enter');
+    await page.locator('#preview-toggle').click(); await question.fill('현재 경로를 확인하고 대기 작업을 실행해줘'); await question.press('Enter');
     await page.locator('#terminal-take-control').waitFor(); await page.waitForFunction(() => document.querySelector('.terminal-pane:not([hidden]) .xterm-rows').textContent.includes('sleep 99'));
     assert.equal(await page.evaluate(async id => { try { await window.keyshell.call('write', { id, data: 'overlap' }); return false; } catch { return true; } }, id), true);
-    assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.locator('#delegation-toggle').count(), 0);
     assert.equal(await page.locator('#terminal-take-control').isVisible(), true);
-    await page.locator('#terminal-take-control').click(); await ready(); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'true'); assert.equal(await page.locator('#terminal-take-control').isVisible(), false);
+    await page.locator('#terminal-take-control').click(); await ready(); assert.equal(await page.locator('#delegation-toggle').count(), 0); assert.equal(await page.locator('#terminal-take-control').isVisible(), false);
     await app.evaluate(({ app }) => { app.__sharedHoldNext = true; app.__sharedPlanningReady = new Promise(resolve => { app.__sharedPlanningEntered = resolve; }); });
     await question.fill('다음 점검을 계획해줘'); await question.press('Enter'); await page.locator('#cancel-ai').waitFor(); await app.evaluate(({ app }) => app.__sharedPlanningReady);
-    await page.evaluate(id => window.keyshell.call('write', { id, data: '' }), id); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'true');
-    await terminal.focus(); await page.keyboard.type('echo manual'); await page.keyboard.press('Enter'); await ready(); await page.waitForFunction(() => document.getElementById('delegation-status').textContent.includes('직접 조작 중')); assert.equal(await page.locator('#delegation-toggle').getAttribute('aria-pressed'), 'true');
+    await page.evaluate(id => window.keyshell.call('write', { id, data: '' }), id); assert.equal(await page.locator('#delegation-toggle').count(), 0);
+    await terminal.focus(); await page.keyboard.type('echo manual'); await page.keyboard.press('Enter'); await ready(); await page.waitForFunction(() => document.getElementById('delegation-status').textContent.includes('직접 조작으로 전환')); assert.equal(await page.locator('#delegation-toggle').count(), 0);
     assert.equal(await app.evaluate(({ app }) => app.__sharedPlanningCancelled), true);
     assert.ok(!commands.includes('whoami')); assert.equal(execs, 0); assert.equal(shells, 1); assert.equal(held, null);
     assert.equal(await page.locator('#executions').isVisible(), false); assert.deepEqual(errors, []); await page.screenshot({ path: path.resolve('docs/verification/desktop/shared-terminal.png') });

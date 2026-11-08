@@ -1,11 +1,11 @@
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const { Automation, action, needsManualReview } = require('../src/main/automation.cjs');
+const { Automation, action } = require('../src/main/automation.cjs');
 const { AIService } = require('../src/main/ai-service.cjs');
 function fixture(t, responses, options = {}) {
   let active = 'first';
-  const target = { sessionId: 'first', generation: 'one', status: 'connected', username: 'tester', host: 'localhost', port: 22 };
+  const target = { sessionId: 'first', generation: 'one', status: 'connected', username: 'tester', host: '192.0.2.44', port: 22 };
   const auth = new EventEmitter(); auth.activeId = 'account'; auth.store = { getTokens: () => ({}) }; auth.accessToken = async () => 'fixture';
   const calls = [], commands = [], signals = [];
   const ai = new AIService({ auth, fetch: async (_url, options) => {
@@ -13,7 +13,7 @@ function fixture(t, responses, options = {}) {
     const response = responses.shift(); if (typeof response === 'function') return response(options);
     const text = typeof response === 'string' ? response : JSON.stringify(response);
     return new Response(`data: ${JSON.stringify({ type: 'response.output_text.delta', delta: text })}\n\ndata: {"type":"response.completed"}\n\n`);
-  } }); ai.catalog = [{ slug: 'model' }]; ai.setModel('first', 'model');
+  } }); ai.catalog = [{ slug: 'model' }]; ai.setModel('first', 'model'); ai.protectHost('first', target.host);
   const ssh = new EventEmitter(); ssh.executions = new Map(); ssh.tokens = new Map(); ssh.listSessions = () => [target];
   ssh.prepareExecution = (sessionId, command) => { const id = String(ssh.executions.size + 1), e = { id, sessionId, generation: target.generation, command, token: 'token-' + id, status: 'pending' }; ssh.tokens.set(e.token, id); ssh.executions.set(id, e); return e; };
   ssh.approveExecution = token => { const e = ssh.executions.get(ssh.tokens.get(token)); assert.equal(e.status, 'pending'); ssh.tokens.delete(token); e.status = 'running'; commands.push(e.command); ssh.emit('execution', { ...e }); return { executionId: e.id }; };
@@ -31,9 +31,9 @@ test('delegation requires explicit goal consent, runs sequentially, reads final 
   const p = f.automation.prepare({ sessionId: 'first', model: 'model', goal: 'Install nginx' }); assert.deepEqual(f.commands, []);
   assert.throws(() => f.automation.start('invalid'), { code: 'E-DELEGATION-STALE' }); assert.deepEqual(f.commands, []);
   f.start(); await tick(); assert.deepEqual(f.commands, ['cat /etc/os-release']);
-  assert.equal(f.calls.length, 1); f.finish('package unavailable password=private host=192.0.2.44 API_KEY=DELEGATED_KEY_VALUE', 1); await tick();
+  assert.equal(f.calls.length, 1); f.finish('package unavailable password=private host=192.0.2.44 peer=198.51.100.8 API_KEY=DELEGATED_KEY_VALUE', 1); await tick();
   assert.deepEqual(f.commands, ['cat /etc/os-release', 'nginx -v']); const payload = JSON.stringify(f.calls[1]);
-  assert.match(payload, /failed/); assert.match(payload, /exitCode/); assert.ok(!payload.includes('private')); assert.ok(!payload.includes('192.0.2.44')); assert.ok(!payload.includes('DELEGATED_KEY_VALUE')); assert.ok(!payload.includes('UNRELATED_OLD_GOAL'));
+  assert.match(payload, /failed/); assert.match(payload, /exitCode/); assert.ok(!payload.includes('private')); assert.ok(!payload.includes('192.0.2.44')); assert.match(payload, /198\.51\.100\.8/); assert.ok(!payload.includes('DELEGATED_KEY_VALUE')); assert.ok(!payload.includes('UNRELATED_OLD_GOAL'));
   f.finish('nginx/1.28'); await f.automation.running; assert.equal(f.automation.state().reason, 'completed'); assert.equal(f.automation.state().enabled, false); assert.equal(f.calls.length, 3);
   assert.match(JSON.stringify(f.calls[2]), /nginx\/1.28/); assert.equal(f.ai.sessions.get('first').history[0].content, 'UNRELATED_OLD_GOAL');
 });
@@ -76,13 +76,11 @@ test('delegation continues beyond thirty steps and retains its goal and progress
   await f.automation.running; assert.equal(f.automation.state().steps, 35); assert.equal(f.automation.state().reason, 'completed');
   assert.match(f.calls[34].input.at(-1).content, /checkpoint 33/); assert.match(f.calls[34].input.at(-1).content, /Install nginx, PHP 8.5 and MariaDB/);
 });
-test('delegation refuses malformed action, hidden control and additional confirmation operations', async t => {
+test('agent rejects malformed tool actions and hidden controls', () => {
   for (const text of ['```json\n{}\n```', '{"action":"run","command":"whoami","summary":"ok","extra":true}', JSON.stringify({ action: 'run', command: 'whoami\r', summary: 'x' })]) assert.throws(() => action(text), { code: 'E-DELEGATION-RESPONSE' });
-  const f = fixture(t, [{ action: 'run', summary: 'Delete', command: 'rm -rf /srv/database' }]); f.start(); await f.automation.running; assert.equal(f.automation.state().reason, 'needs-input'); assert.deepEqual(f.commands, []);
 });
 test('reboot-required status checks are not mistaken for reboot commands', async t => {
   const check = "printf '\\n=== Reboot requirement ===\\n'; if [ -f /var/run/reboot-required ]; then cat /var/run/reboot-required; else printf 'No reboot-required marker\\n'; fi";
-  assert.equal(needsManualReview(check), false);
   const f = fixture(t, [
     { action: 'plan', summary: '상태 점검', command: '', tasks: ['재부팅 필요 여부 확인', '결과 확인'] },
     { action: 'run', task: 1, summary: '상태 파일 확인', command: check },
@@ -124,13 +122,25 @@ test('AI authority uses Responses function tools and returns observed SSH output
   f.finish('6.8.0-generic'); await f.automation.running;
   assert.equal(f.automation.state().reason, 'completed');
 });
-test('actual dangerous commands still need manual review', () => {
-  for (const command of ['reboot', 'sudo reboot', 'if true; then reboot; fi', 'rm -rf /srv/database', 'sudo rm -rf /srv/database', 'mkfs.ext4 /dev/sdb', "bash -c 'reboot'", 'find /srv -name old -exec rm {} \\;', 'cat /var/log/a; shutdown -r now']) {
-    assert.equal(needsManualReview(command), true, command);
-  }
-  for (const command of ['cat /var/run/reboot-required', "printf 'No reboot-required marker\\n'", "grep 'reboot' /var/log/syslog", 'cat /etc/os-release; uname -r']) {
-    assert.equal(needsManualReview(command), false, command);
-  }
+test('AI authority executes requested server maintenance without a second command review', async t => {
+  const f = fixture(t, [{ action: 'plan', summary: '패키지 유지관리', command: '', tasks: ['패키지 업데이트'] }, { action: 'run', summary: '패키지 업데이트', task: 1, command: 'sudo apt-get update && sudo apt-get upgrade -y' }, { action: 'done', summary: '패키지 확인 완료', task: 1, command: '' }]);
+  f.automation.arm({ sessionId: 'first', model: 'model' });
+  f.automation.submit({ sessionId: 'first', model: 'model', goal: '패키지를 업데이트해줘' });
+  await tick(); assert.deepEqual(f.commands, ['sudo apt-get update && sudo apt-get upgrade -y']);
+  f.finish('0 upgraded'); await f.automation.running;
+  assert.equal(f.automation.state().reason, 'completed');
+});
+test('a progress reply keeps the server task active until execution and verification finish', async t => {
+  const f = fixture(t, [
+    { action: 'plan', summary: '점검 순서', command: '', tasks: ['OS 확인'] },
+    { action: 'reply', summary: 'OS 정보를 확인하고 있습니다.', command: '' },
+    { action: 'run', summary: 'OS 확인', task: 1, command: 'cat /etc/os-release' },
+    { action: 'done', summary: 'OS 확인 완료', task: 1, command: '' }
+  ]);
+  f.automation.submit({ sessionId: 'first', model: 'model', goal: 'OS를 점검해줘' });
+  await tick(); assert.deepEqual(f.commands, ['cat /etc/os-release']);
+  f.finish('Ubuntu 24.04'); await f.automation.running;
+  assert.equal(f.automation.state().reason, 'completed');
 });
 test('delegation cannot report completion without an observed successful execution', async t => {
   const f = fixture(t, [{ action: 'done', summary: '완료 주장', command: '' }]); f.start(); await f.automation.running; assert.equal(f.automation.state().reason, 'needs-input'); assert.deepEqual(f.commands, []);
@@ -140,16 +150,14 @@ test('manual approval opt-out and cancelled follow-up never transmit results', a
   e = f.ssh.prepareExecution('first', 'php -v'); f.automation.approve(e.token, true); f.automation.stop('cancelled'); f.finish('AFTER_CANCEL_DO_NOT_SHARE'); await tick(); assert.equal(f.calls.length, 0);
 });
 
-test('one ON action arms the current server for multiple goals, with no per-goal consent', async t => {
+test('ordinary SSH chat automatically starts server AI and keeps context for later messages', async t => {
   const f = fixture(t, [{ action: 'plan', summary: '작업 순서', command: '', tasks: ['버전 확인'] }, { action: 'ask', summary: '필요한 버전을 알려주세요', command: '' }, { action: 'plan', summary: '작업 순서', command: '', tasks: ['다음 확인'] }, { action: 'ask', summary: '다음 작업 확인', command: '' }]);
   const notices = []; f.automation.on('notice', n => notices.push(n.text));
   const input = { sessionId: 'first', model: 'model', goal: 'Install nginx' };
-  assert.throws(() => f.automation.submit(input), { code: 'E-DELEGATION-NOT-ARMED' });
-  f.automation.arm(input); f.automation.arm(input); assert.equal(f.calls.length, 0); assert.equal(notices.length, 1);
   f.automation.submit(input); await f.automation.running; assert.equal(f.automation.state().armed, true);
   f.automation.submit({ ...input, goal: 'Version 1.28' }); await f.automation.running; assert.equal(f.calls.length, 4);
-  assert.equal(notices.filter(n => n.startsWith('AI 권한 ON')).length, 1);
-  f.automation.stop(); assert.equal(f.automation.state().armed, false); assert.throws(() => f.automation.submit(input), { code: 'E-DELEGATION-NOT-ARMED' });
+  assert.equal(notices.filter(n => n.startsWith('서버 AI가')).length, 1);
+  f.automation.stop(); assert.equal(f.automation.state().armed, false);
 });
 test('idle delegation mode is revoked on account and connection changes', t => {
   const f = fixture(t, []); const input = { sessionId: 'first', model: 'model' };
@@ -179,12 +187,12 @@ test('delegated plan displays ordered tasks, runs sequentially and reports conci
   assert.equal(f.automation.state().reason, 'completed');
   assert.match(notices.at(-1), /^완료: 2개 작업 확인/);
 });
-test('an armed delegation must receive a plan before any command', async t => {
+test('AI authority may start a requested task with a command even before a separate plan', async t => {
   const f = fixture(t, [{ action: 'run', summary: '바로 실행', command: 'whoami' }]);
   f.automation.arm({ sessionId: 'first', model: 'model' });
   f.automation.submit({ sessionId: 'first', model: 'model', goal: '점검' });
-  await f.automation.running; assert.deepEqual(f.commands, []);
-  assert.equal(f.automation.state().reason, 'needs-input'); assert.equal(f.automation.state().armed, true);
+  await tick(); assert.deepEqual(f.commands, ['whoami']);
+  f.automation.stop(); await f.automation.running;
 });
 test('delegation polls local execution state every three seconds without sending another SSH command', async t => {
   t.mock.timers.enable({ apis: ['setInterval'] });

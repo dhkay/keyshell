@@ -21,14 +21,27 @@ function commandCards(text) {
 class AIService extends EventEmitter {
   constructor({ auth, fetch: fetchImpl = globalThis.fetch, now = Date.now, previewTtlMs = 120000 }) {
     super(); this.auth = auth; this.fetch = fetchImpl; this.now = now; this.previewTtlMs = previewTtlMs;
-    this.sensitive = new SensitiveValues(); this.sessions = new Map(); this.catalog = []; this.previews = new Map(); this.requests = new Map(); this.epoch = 0; this.modelControllers = new Set();
+    this.sensitive = new SensitiveValues(); this.protectedHosts = new Map(); this.sessions = new Map(); this.catalog = []; this.previews = new Map(); this.requests = new Map(); this.epoch = 0; this.modelControllers = new Set();
     this.onAuthChange = () => { this.epoch++; for (const c of this.modelControllers) c.abort(); for (const r of this.requests.values()) { r.cancelled = true; r.controller.abort(); } this.requests.clear(); this.previews.clear(); this.sessions.clear(); this.catalog = []; this.emit('state', { type: 'reset', accountId: this.auth.activeId }); };
     this.auth.on('change', this.onAuthChange);
   }
   rememberSecret(value) { if (this.sensitive.add(value)) this.invalidatePreviews(); }
-  dispose() { this.onAuthChange(); this.sensitive.dispose(); this.auth.off('change', this.onAuthChange); this.removeAllListeners(); }
+  protectHost(sessionId, hosts) {
+    validateSession(sessionId);
+    if (!Array.isArray(hosts)) hosts = [hosts];
+    if (!hosts.length || hosts.length > 2 || hosts.some(host => typeof host !== 'string' || !host || host.length > 253)) fail('E-AI-INPUT');
+    this.protectedHosts.get(sessionId)?.dispose();
+    const registry = new SensitiveValues();
+    for (const host of hosts) {
+      registry.add(host);
+      if (host.includes(':')) { try { registry.add(new URL(`http://[${host}]/`).hostname.slice(1, -1)); } catch {} }
+    }
+    this.protectedHosts.set(sessionId, registry);
+    this.invalidatePreviews(sessionId);
+  }
+  dispose() { this.onAuthChange(); this.sensitive.dispose(); for (const registry of this.protectedHosts.values()) registry.dispose(); this.protectedHosts.clear(); this.auth.off('change', this.onAuthChange); this.removeAllListeners(); }
   _session(id) { validateSession(id); if (!this.sessions.has(id)) this.sessions.set(id, { history: [], model: null }); return this.sessions.get(id); }
-  resetSession(id) { validateSession(id); this.cancel(id); this.sessions.delete(id); this._invalidatePreview(id); this.emit('state', { type: 'session-reset', sessionId: id }); }
+  resetSession(id) { validateSession(id); this.cancel(id); this.sessions.delete(id); this.protectedHosts.get(id)?.dispose(); this.protectedHosts.delete(id); this._invalidatePreview(id); this.emit('state', { type: 'session-reset', sessionId: id }); }
   _invalidatePreview(id) { for (const [token, p] of this.previews) if (p.sessionId === id) this.previews.delete(token); }
   invalidatePreviews(sessionId) {
     if (sessionId === undefined) this.previews.clear();
@@ -63,7 +76,7 @@ class AIService extends EventEmitter {
     const attachments = input.attachments || [];
     if (!Array.isArray(attachments) || attachments.length > 16) fail('E-AI-ATTACHMENTS');
     let redactions = 0, total = Buffer.byteLength(question);
-    const mask = value => { const known = this.sensitive.redact(value), r = redactSecrets(known.text); redactions += r.redactions + known.redactions; return r.text; };
+    const mask = value => { const known = this.sensitive.redact(value), host = this.protectedHosts.get(sessionId)?.redact(known.text) || { text: known.text, redactions: 0 }, r = redactSecrets(host.text); redactions += r.redactions + known.redactions + host.redactions; return r.text; };
     const maskedQuestion = mask(question);
     const sources = [];
     const maskedAttachments = attachments.map(a => {
