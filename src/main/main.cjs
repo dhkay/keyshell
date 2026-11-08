@@ -6,6 +6,7 @@ const { SSHService } = require('./ssh-service.cjs');
 const { Store } = require('./store.cjs');
 const { CredentialStore } = require('./credential-store.cjs');
 const { SSHCredentialStore } = require('./ssh-credential-store.cjs');
+const { SharePreference } = require('./share-preference.cjs');
 const { AuthService } = require('./auth-service.cjs');
 const { AIService } = require('./ai-service.cjs');
 const { UpdateService } = require('./update-service.cjs');
@@ -33,6 +34,7 @@ else app.whenReady().then(async () => {
   // Packaged apps always share the interactive terminal; opt-out is source-test-only.
   const store = new Store(app.getPath('userData')), ssh = new SSHService({ sharedTerminal: !(!app.isPackaged && process.env.KEYSHELL_TEST_LEGACY_EXEC === '1'), store });
   const sshCredentials = new SSHCredentialStore(app.getPath('userData'), safeStorage);
+  const sharePreference = new SharePreference(app.getPath('userData'));
   const auth = new AuthService({ store: new CredentialStore(app.getPath('userData'), safeStorage), openBrowser: async value => { const u = new URL(value); if (u.origin !== 'https://auth.openai.com' || u.pathname !== '/api/accounts/authorize' || u.username || u.password) throw new Error('E-AUTH-URL'); await shell.openExternal(value); } });
   const ai = new AIService({ auth });
   // Explicit source-only fixture; cannot override endpoints or inject executable code.
@@ -45,7 +47,7 @@ else app.whenReady().then(async () => {
     quitting = true; cleanup(); return true;
   };
   const updates = new UpdateService({ app, updater: require('electron-updater').autoUpdater, confirmClose });
-  const removeIPC = installIPC({ ipcMain, window, ssh, ai, auth, store, sshCredentials, updates, dialog, app, clipboard, Menu });
+  const removeIPC = installIPC({ ipcMain, window, ssh, ai, auth, store, sshCredentials, sharePreference, updates, dialog, app, clipboard, Menu });
   let hasRendererDocument = false;
   window.webContents.on('did-finish-load', () => { hasRendererDocument = true; });
   window.webContents.on('did-start-navigation', (_event, _url, inPlace, mainFrame) => { if (mainFrame && !inPlace && hasRendererDocument) { removeIPC.rendererLost('navigation'); hasRendererDocument = false; } });

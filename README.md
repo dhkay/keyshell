@@ -27,10 +27,10 @@ npm start
 
 - 기본은 **전송 전 확인 OFF**입니다. Enter 또는 `전송 ↵`으로 질문과 직접 첨부한 내용을 바로 보내고, Shift+Enter로 줄바꿈합니다. 한글 조합 확정 Enter는 전송하지 않습니다.
 - `전송 전 확인 ON`을 선택하면 Enter로 전체 요청을 확인·편집·취소한 뒤 한 번 전송합니다. 두 모드 모두 전송 전에 로컬 가림을 적용하며, 가림이 모든 비밀을 찾는다고 보장하지 않습니다.
-- `AI 터미널 공유`은 기본 OFF입니다. 연결된 현재 SSH 세션에서 계정·모델·공유 범위를 확인하고 동의한 뒤 켤 수 있습니다. 일반 질문의 미리보기 설정과 별도의 자동 공유 동의입니다.
+- `AI 터미널 공유`는 기본 ON입니다. SSH 연결과 ChatGPT 로그인이 준비되면 현재 세션에서 새로 수신한 출력을 자동 공유합니다. 설정과 공유 버튼에서 직접 OFF로 바꾸면 그 선택을 앱 재시작 후에도 유지합니다. ON 상태에서 연결·로그인이 없으면 전송하지 않고 대기합니다.
 - 자동 조언은 활성화 이후 앱에서 새로 수신한 출력만 최대 8KiB 모읍니다. 2초간 출력이 없거나 최대 10초 모으면 안내를 요청하되 최소 60초 간격으로 보내며 횟수 제한은 없습니다. 계속 공유할 수 있도록 이전 AI 맥락은 최근 64KiB로 정리하고 정리 여부를 표시합니다. 기존 대화도 요청에 포함되므로 전체 요청 크기는 출력 제한보다 클 수 있습니다.
-- 자동 조언은 끄기·탭 이동·연결 종료·계정/모델 변경·새 대화·요청 오류·화면 재시작 때 중지합니다. 이미 전송한 정보는 회수하지 못합니다. 화면 캡처·다른 세션·키보드 입력·인증정보 저장소는 자동으로 읽지 않습니다.
-- 미리보기 설정과 자동 조언 동의는 현재 앱 실행 중에만 유지합니다. SSH 채팅은 요청한 서버 작업을 순차 실행합니다. 직접 선택한 AI 제안 명령의 `Review & run` 흐름도 유지합니다.
+- 채팅 입력·탭 이동·연결 종료·계정/모델 변경·새 대화·요청 오류는 ON 선택을 바꾸지 않습니다. 사용 가능한 세션으로 돌아오면 새 출력 공유가 이어집니다. 이미 전송한 정보는 회수하지 못합니다. 화면 캡처·다른 세션·키보드 입력·인증정보 저장소는 자동으로 읽지 않습니다.
+- 미리보기 설정은 현재 앱 실행 중에만 유지합니다. SSH 채팅은 요청한 서버 작업을 순차 실행하며, 채팅 중에는 자동 조언보다 채팅 요청을 우선 처리합니다. 직접 선택한 AI 제안 명령의 `Review & run` 흐름도 유지합니다.
 
 ## 채팅 위치와 실행 결과 분석
 
@@ -108,7 +108,7 @@ npm run package:dev
 
 ## 데이터와 실행 경계
 
-- 전송 전 확인 ON에서는 질문·첨부·이전 대화가 포함된 전체 요청을 확인할 수 있습니다. OFF에서는 전송 동작을, 자동 조언에서는 별도의 세션별 동의를 공유 승인으로 사용합니다. 가림은 로컬에서 하며 모든 비밀을 탐지한다고 보장하지 않습니다.
+- 전송 전 확인 ON에서는 질문·첨부·이전 대화가 포함된 전체 요청을 확인할 수 있습니다. OFF에서는 전송 동작을 사용합니다. AI 터미널 공유는 설정에서 직접 끌 수 있습니다. 가림은 로컬에서 하며 모든 비밀을 탐지한다고 보장하지 않습니다.
 - 일반 대화에는 SSH 실행 도구나 인증정보 접근 권한을 제공하지 않습니다. 연결된 SSH 채팅에서 요청한 목표에 대해 앱이 AI의 구조화된 명령 요청을 실행합니다. 터미널 출력과 AI 답변은 비신뢰 데이터로 처리합니다.
 - 앱의 승인·위임 명령은 현재 화면의 SSH PTY를 사용하며, 사용자의 현재 경로·환경을 이어 사용합니다. 별도 실행 결과 패널로 분리하지 않습니다. 명령어 허용 목록은 사용하지 않습니다. 사용자가 전체 명령과 대상을 확인해 한 번 승인하거나 SSH 채팅으로 목표를 보내면 실행하며, 숨겨진 제어 문자·잘못된 입력·가려진 값(****)이 포함된 명령은 거부합니다. 삭제·권한 변경·외부 전송·복합 셸 구문은 주의 항목으로 표시합니다.
 - 실패·연결 단절·앱 재시작으로 질문이나 명령을 자동 재전송하지 않습니다. 결과를 알 수 없을 때 성공으로 표시하지 않습니다.
@@ -160,9 +160,9 @@ The controls currently use Korean labels:
 
 - **Review before sending** defaults to OFF. Enter sends your question and explicitly attached output; Shift+Enter inserts a newline. Enter used to finish Korean IME composition does not send the message. Turn review ON to inspect, edit, or cancel the complete request before sending.
 - Scroll up to keep your reading position while answers arrive. Press Enter in an empty chat input to jump to the bottom and follow new content.
-- **AI terminal sharing** defaults to OFF and requires separate consent for the current SSH session, account, model, and sharing scope. It sends newly received terminal and execution output after you enable it. It does not capture screenshots or automatically read other sessions, keyboard input, or credential storage.
+- **AI terminal sharing** defaults to ON. Once SSH and ChatGPT are connected, it automatically sends newly received output from the active SSH session. You can turn it OFF in Settings or beside the chat; that choice persists across restarts. It does not capture screenshots or automatically read other sessions, keyboard input, or credential storage.
 - Automatic advice collects up to 8KiB of recent output, waits for two seconds of inactivity or ten seconds of collection, and sends at least 60 seconds apart. There is no ten-request quota. Older AI context is trimmed to a recent 64KiB window with a notice; previous conversation content can also be included.
-- Automatic sharing stops when disabled, when the tab, connection, account, model, or conversation changes, on request errors, or when the renderer restarts. These preferences and sharing consent apply only to the current app run. Information already transmitted cannot be recalled.
+- Clicking or using the chat, changing tabs, and temporary connection or account loss do not turn the sharing preference OFF. Sending waits until the selected SSH session, ChatGPT login, and model are available. Chat requests take priority over automatic advice. Information already transmitted cannot be recalled.
 - Requests use local secret masking, which can miss sensitive information. Review the information you choose to share.
 
 ### Local masking before AI transmission

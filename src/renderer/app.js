@@ -5,7 +5,7 @@ const call = (method, input) => window.keyshell.call(method, input);
 const sessions = new Map(), conversations = new Map(), pendingRequests = new Set();
 let connectionAttempt = null;
 let loginPending = false, loginError = '';
-let previewEnabled = false, adviceState = { enabled: false }, delegationState = { enabled: false }, composing = false;
+let previewEnabled = false, adviceState = { preferred: true, enabled: false }, delegationState = { enabled: false }, composing = false;
 const chatViews = new Map();
 function chatView(id = active) { if (!chatViews.has(id)) chatViews.set(id, { follow: true, top: 0 }); return chatViews.get(id); }
 function bottomOfChat() { const view = chatView(); view.follow = true; $('messages').scrollTop = $('messages').scrollHeight; view.top = $('messages').scrollTop; }
@@ -246,18 +246,18 @@ function renderSharing() {
   $('send-message').textContent = delegateMode ? '전송 ↵' : previewEnabled ? '내용 확인 →' : '전송 ↵'; $('send-message').setAttribute('aria-label', delegateMode ? 'Send server AI message' : previewEnabled ? 'Preview message' : 'Send message');
   $('send-message').disabled = (delegateMode ? false : pendingRequests.has(active)) || directRequests.has(active);
   $('send-hint').textContent = delegateMode ? 'Enter: AI와 대화 · 작업 요청 시 순차 실행 · Shift+Enter: 줄바꿈' : previewEnabled ? 'Enter: 전송 내용 확인 · Shift+Enter: 줄바꿈' : 'Enter: 바로 전송 · Shift+Enter: 줄바꿈';
-  $('advice-toggle').textContent = `AI 터미널 공유 ${adviceState.enabled ? 'ON · 중지' : 'OFF'}`; $('advice-toggle').setAttribute('aria-pressed', String(adviceState.enabled));
-  $('advice-toggle').disabled = !adviceState.enabled && (!connected || !auth.activeAccountId || !models.length);
-  $('advice-toggle').title = adviceState.enabled ? '이후 자동 전송을 중지합니다.' : !connected ? '먼저 SSH 세션에 연결해 주세요.' : !auth.activeAccountId || !models.length ? 'ChatGPT 로그인과 모델 선택이 필요합니다.' : '공유할 계정·모델·출력 범위를 확인한 뒤 켤 수 있습니다.';
-  $('advice-status').hidden = !adviceState.enabled && !adviceState.reason;
-  const reason = { stopped: '사용자가 중지했습니다.', cancelled: '응답을 취소했습니다.', 'tab-changed': '다른 탭으로 이동했습니다.', 'tab-closed': '세션 탭을 닫았습니다.', 'model-changed': '모델이 바뀌었습니다.', 'account-changed': '계정 또는 인증 상태가 바뀌었습니다.', 'connection-changed': 'SSH 연결이 바뀌거나 끊겼습니다.', 'context-changed': '공유 대상이 바뀌었습니다.', 'conversation-reset': '새 대화를 시작했습니다.', 'request-failed': 'AI 요청이 실패했습니다. 다시 켜기 전 연결과 사용 한도를 확인하세요.', 'renderer-restarted': '화면이 다시 시작됐습니다.' }[adviceState.reason] || '다시 켜려면 공유 범위를 확인하세요.';
-  $('advice-status').textContent = adviceState.enabled ? '새 SSH 출력 자동 공유 중 · 횟수 제한 없음' : `자동 공유 중지 · ${reason}${adviceState.error ? ` ${errorText(adviceState.error)}` : ''}`;
-  $('sharing-privacy').textContent = delegateMode ? '서버 AI 채팅과 실행 명령·결과를 AI에 공유합니다. 연결된 서버 IP·비밀번호·인증키 등은 전송 전에 ****로 가립니다. 다른 IP는 서버 분석에 사용합니다.' : adviceState.enabled ? '현재 SSH 출력과 이 대화의 이전 내용만 공유합니다. 연결된 서버 IP·비밀번호·인증키 등은 전송 전에 ****로 가립니다. 다른 IP는 서버 분석에 사용합니다.' : '질문·직접 첨부·이전 대화를 전송합니다. 연결된 서버 IP·비밀번호·인증키 등은 전송 전에 ****로 가립니다. 다른 IP는 서버 분석에 사용합니다.';
+  $('advice-toggle').textContent = `AI 터미널 공유 ${adviceState.preferred ? 'ON' : 'OFF'}`; $('advice-toggle').setAttribute('aria-pressed', String(!!adviceState.preferred));
+  $('advice-toggle').disabled = false;
+  $('advice-toggle').title = adviceState.preferred ? '클릭하면 자동 공유를 끕니다. 채팅과 탭 이동은 이 설정을 바꾸지 않습니다.' : '클릭하면 연결된 SSH 세션의 새 출력을 자동 공유합니다.';
+  $('advice-status').hidden = false;
+  const sharingStatus = !adviceState.preferred ? '자동 공유 꺼짐' : adviceState.enabled ? '현재 SSH 세션의 새 출력 공유 중' : !connected ? '공유 ON · SSH 연결 대기' : !auth.activeAccountId ? '공유 ON · ChatGPT 로그인 대기' : !models.length ? '공유 ON · 모델 선택 대기' : adviceState.reason === 'request-failed' ? '공유 ON · 요청 실패 후 재시도 대기' : '공유 ON · 전송 준비 중';
+  $('advice-status').textContent = sharingStatus;
+  $('sharing-privacy').textContent = `${delegateMode ? '서버 AI 채팅과 실행 결과를 전송합니다. ' : '질문과 직접 첨부한 출력을 전송합니다. '}${adviceState.preferred ? 'AI 터미널 공유 ON이면 연결된 현재 SSH 세션의 새 출력도 자동 전송합니다. ' : ''}연결 대상 IP·비밀번호·인증키는 전송 전에 ****로 가립니다. 가림은 완벽하지 않습니다.`;
+  renderSettingsShare();
   $('question').placeholder = delegateMode ? '이 서버에 대해 질문하거나 작업을 요청하세요…' : 'Ask about this session…';
   $('delegation-status').hidden = !delegationState.enabled && !delegationState.reason;
   const ended = { completed: '목표 완료', 'manual-takeover': '직접 조작으로 전환', 'needs-input': '추가 입력 필요', stopped: '사용자가 중지함', cancelled: '응답을 취소함', 'result-unknown': '실행 결과가 불확실하여 중지' }[delegationState.reason] || delegationState.reason;
   $('delegation-status').textContent = delegationState.enabled ? `AI 작업 진행 · ${delegationState.phase} · 작업 ${delegationState.currentTask || 0}/${delegationState.tasks?.length || 0}: ${delegationState.tasks?.[delegationState.currentTask - 1]?.title || "목록 작성 중"}` : `서버 AI · ${ended}`;
-  $('advice-toggle').disabled ||= delegationState.enabled;
   $('preview-toggle').disabled = delegationState.enabled;
   $('cancel-ai').hidden = !pendingRequests.has(active) && !delegationState.enabled;
   const shared = sessions.get(active)?.meta;
@@ -281,13 +281,7 @@ async function submitMessage() {
   finally { directRequests.delete(sessionId); pendingRequests.delete(sessionId); $('cancel-ai').hidden = !pendingRequests.has(active); renderSharing(); }
 }
 async function toggleAdvice() {
-  if (adviceState.enabled) { adviceState = await call('adviceStop'); renderSharing(); return; }
-  const prepared = await call('advicePrepare', { sessionId: active, model: $('model').value });
-  const body = modal('AI 자동 조언 켜기', () => call('adviceStop'));
-  body.append(el('p', `공유할 SSH 세션: ${prepared.target.username}@${prepared.target.host}:${prepared.target.port}\nChatGPT 계정: ${prepared.account}\n모델: ${prepared.model}`), el('p', '켜는 시점 이후 앱에서 이 세션의 새 터미널·실행 출력을 수신할 때만 자동 공유합니다. 최근 출력 최대 8KB를 모아 출력이 잠시 멈추거나 최대 10초가 지나면 안내를 요청합니다. 최소 1분 간격이며 횟수 제한 없이 직접 끌 때까지 동작합니다. 오래된 AI 대화 맥락은 최근 64KB로 정리되며, 정리 시 채팅에 표시합니다.'), el('p', '화면 캡처나 다른 세션은 읽지 않습니다. 로컬 비밀 가림은 완벽하지 않습니다. 끄면 이후 전송을 중지하지만 이미 보낸 내용은 회수할 수 없습니다. 계정·모델·탭·연결·대화가 바뀌면 꺼집니다. 명령 실행은 별도 승인이 필요합니다.'));
-  const consent = field(body, '이 세션의 새 출력을 ChatGPT에 자동 공유하는 데 동의합니다', 'advice-consent', 'checkbox');
-  const enable = button('동의하고 켜기', async () => { enable.disabled = true; try { adviceState = await call('adviceEnable', prepared.token); modalCancel = null; clearModal(); renderSharing(); } catch (e) { clearModal(); notice('공유 동의가 만료되었거나 대상이 바뀌었습니다. AI 자동 조언 버튼에서 다시 확인해 주세요.'); } }, 'mint'); enable.disabled = true; consent.onchange = () => { enable.disabled = !consent.checked; };
-  actions(body, [button('Cancel', clearModal), enable]);
+  adviceState = await call('advicePreference', !adviceState.preferred); renderSharing();
 }
 async function sendDelegation() {
   const id = active, goal = $('question').value, selectedAttachment = attachment;
@@ -384,20 +378,35 @@ function renderSettingsAuth() {
   const remember = document.querySelector('#modal input[name="remember"]');
   if (remember) { remember.disabled = auth.persistence !== 'encrypted' || connected || loginPending; if (connected) remember.checked = !!account.remembered; else if (wasConnected) remember.checked = false; }
 }
+function renderSettingsShare() {
+  const toggle = $('settings-share-toggle');
+  if (!toggle) return;
+  toggle.textContent = `AI 터미널 공유 ${adviceState.preferred ? 'ON' : 'OFF'}`;
+  toggle.setAttribute('aria-pressed', String(!!adviceState.preferred));
+  $('settings-share-status').textContent = $('advice-status').textContent;
+}
 function settings() {
   const body = modal('Settings & privacy');
+  body.append(el('p', `KeyShell ${settings.version} · ${settings.packaged ? '설치 버전' : '개발 버전'}`, { class: 'settings-intro' }));
+  body.append(el('h3', 'ChatGPT 계정', { class: 'settings-heading' }));
   const status = el('div', null, { id: 'settings-auth-status', class: 'settings-auth-status', role: 'status', 'aria-live': 'polite' });
   status.append(el('strong', '', { id: 'settings-auth-label' }), el('p', '', { id: 'settings-auth-detail' })); body.append(status);
-  body.append(el('p', `KeyShell ${settings.version} · ${settings.packaged ? 'Packaged build' : 'Development build'}\nAuthentication storage: ${auth.persistence === 'encrypted' ? 'OS encrypted storage available' : 'Memory only'}.`), el('p', 'SSH passwords are stored locally only when OS encryption is available and Save SSH password is selected. Saved profiles and trusted host keys remain local. ChatGPT tokens persist only when you opt into OS-encrypted storage. Conversations, terminal output and execution records stay in memory and are discarded when the app exits. Nothing reconnects, sends or executes automatically after restart.'));
   for (const session of sessions.values()) if (session.meta.error === 'E-SSH-HOSTKEY-CHANGED') body.append(button(`Recover trusted key: ${session.meta.host}:${session.meta.port}`, () => recoverTrust(session.meta.sessionId)));
-  const remember = field(body, 'Remember ChatGPT login using OS encryption', 'remember', 'checkbox'); remember.disabled = auth.persistence !== 'encrypted';
-  body.append(el('h3', '터미널 화면 설정'));
+  const remember = field(body, 'ChatGPT 로그인 기억하기 (OS 암호화)', 'remember', 'checkbox'); remember.disabled = auth.persistence !== 'encrypted';
+  const signIn = button('로그인', () => login(remember.checked)), signOut = button('로그아웃', async () => showLogoutResult(await call('logout'))), cancel = button('로그인 취소', cancelLogin);
+  signIn.id = 'settings-sign-in'; signOut.id = 'settings-sign-out'; cancel.id = 'settings-cancel-login';
+  actions(body, [cancel, signIn, signOut]);
+  body.append(el('h3', 'AI 터미널 공유', { class: 'settings-heading' }));
+  body.append(el('p', 'ON이면 현재 연결된 SSH 세션의 새 출력을 ChatGPT에 자동 전송합니다. 채팅 입력과 탭 이동으로 설정이 꺼지지 않습니다. SSH 연결이나 로그인이 없으면 전송을 기다립니다.', { class: 'settings-detail' }));
+  const shareToggle = button('', safe(toggleAdvice)); shareToggle.id = 'settings-share-toggle'; shareToggle.type = 'button'; body.append(shareToggle);
+  body.append(el('p', '', { id: 'settings-share-status', class: 'settings-detail', role: 'status' }));
+  body.append(el('h3', '터미널 화면', { class: 'settings-heading' }));
   const font = field(body, '글자 크기 (8–32px)', 'terminal-font', 'number', String(terminalOptions.fontSize)); font.min = '8'; font.max = '32'; font.step = '1'; font.required = true;
   const scrollback = field(body, '스크롤 기록 줄 수 (1,000–50,000)', 'terminal-scrollback', 'number', String(terminalOptions.scrollback)); scrollback.min = '1000'; scrollback.max = '50000'; scrollback.step = '1000'; scrollback.required = true;
   body.append(button('터미널 설정 적용', () => { if (!font.reportValidity() || !scrollback.reportValidity()) return; const next = { fontSize: Number(font.value), scrollback: Number(scrollback.value) }; if (!Number.isInteger(next.fontSize) || !Number.isInteger(next.scrollback)) return; applyTerminalOptions(next); notice('터미널 화면 설정을 적용했습니다.'); }));
-  const signIn = button('Sign in', () => login(remember.checked)), signOut = button('Sign out', async () => showLogoutResult(await call('logout'))), cancel = button('Cancel sign-in', cancelLogin);
-  signIn.id = 'settings-sign-in'; signOut.id = 'settings-sign-out'; cancel.id = 'settings-cancel-login';
-  actions(body, [cancel, signIn, signOut, button('Done', clearModal)]); renderSettingsAuth();
+  body.append(el('h3', '로컬 데이터와 개인정보', { class: 'settings-heading' }));
+  body.append(el('p', `인증 저장소: ${auth.persistence === 'encrypted' ? 'OS 암호화 사용 가능' : '메모리에서만 사용'}. SSH 비밀번호는 저장 옵션을 선택한 경우에만 로컬 OS 암호화 저장소에 보관합니다. 연결 프로필과 신뢰한 호스트 키는 로컬에 남습니다. 대화와 터미널 출력은 앱 종료 시 폐기됩니다. 재시작 후 SSH에 자동 재연결하지 않습니다. 공유 설정이 ON이어도 새 SSH 연결 전에는 출력이 전송되지 않습니다. 민감정보 가림은 완벽하지 않을 수 있습니다.`, { class: 'settings-detail' }));
+  actions(body, [button('Done', clearModal)]); renderSettingsAuth(); renderSettingsShare();
 }
 async function updateDialog(check = false) {
   let state; try { state = check ? await call('checkUpdate') : (await call('state')).updates; } catch (e) { notice(e); return; }

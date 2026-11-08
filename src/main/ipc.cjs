@@ -7,12 +7,14 @@ const APP_URL = 'keyshell://app/index.html';
 function trustedFrame(event, window) {
   return !!event.senderFrame && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && event.senderFrame.url === APP_URL;
 }
-function installIPC({ ipcMain, window, ssh, ai, auth, store, sshCredentials, updates, dialog, app, clipboard, Menu }) {
+function installIPC({ ipcMain, window, ssh, ai, auth, store, sshCredentials, sharePreference, updates, dialog, app, clipboard, Menu }) {
   let active = 'general', startingAttempt = null, recovery = null; const keys = new Set(), pastes = new Map(), attempts = new Map(), sessionAttempts = new Map(), rotations = new Map();
   let previewEnabled = false;
-  const advice = new AutoAdvice({ ssh, ai, auth, getActive: () => active });
+  const advice = new AutoAdvice({ ssh, ai, auth, getActive: () => active, preferred: sharePreference?.get() ?? false });
   const automation = new Automation({ ssh, ai, auth, getActive: () => active });
+  advice.canShare = id => ai.protectedHosts?.has(id) === true;
   advice.shouldCapture = d => !automation.grant && !automation.watched.has(d.executionId);
+  advice.shouldSend = () => !automation.grant;
   const manual = () => { if (automation.grant) fail('E-DELEGATION-BUSY'); };
   ssh.setOutputConsumer?.(true);
   const cancelAttempt = id => { const attempt = attempts.get(id); if (!attempt) return; attempt.cancelled = true; attempt.credentials = null; if (attempt.sessionId && ssh.listSessions().some(s => s.sessionId === attempt.sessionId)) ssh.disconnect(attempt.sessionId); attempts.delete(id); };
@@ -33,7 +35,7 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, sshCredentials, upd
     terminalFocus: value => { if (typeof value !== 'boolean') fail('E-IPC-INPUT'); window.webContents.setIgnoreMenuShortcuts(value); },
     copy: async value => { if (typeof value !== 'string' || Buffer.byteLength(value) > 1048576) fail('E-IPC-INPUT'); await clipboard.writeText(value); return { copied: true }; },
     state: () => ({ profiles: store.listProfiles().map(p => ({ ...p, hasSavedPassword: !!sshCredentials?.has(p) })), sshPasswordStorageAvailable: !!sshCredentials?.available, sessions: ssh.listSessions(), auth: auth.state(), version: app.getVersion(), packaged: app.isPackaged, updates: updates.state, recovery, previewEnabled, advice: advice.state(), delegation: automation.state(), executions: [...ssh.executions.values()].map(e => { const { stream, token, ...view } = e; return view; }) }),
-    activate: id => { if (typeof id !== 'string' || !/^[\w-]{1,128}$/.test(id)) fail('E-SSH-SESSION'); if (id !== active) { automation.stop('tab-changed'); advice.stop('tab-changed'); invalidate(); active = id; } return { active, advice: advice.state() }; },
+    activate: id => { if (typeof id !== 'string' || !/^[\w-]{1,128}$/.test(id)) fail('E-SSH-SESSION'); if (id !== active) { automation.stop('tab-changed'); advice.stop('tab-changed'); invalidate(); active = id; } advice.sync(); return { active, advice: advice.state() }; },
     connect: ({ attemptId, profile, credentials, save, rememberPassword = false }) => {
       if (typeof attemptId !== 'string' || !/^[a-f0-9-]{36}$/.test(attemptId) || attempts.has(attemptId) || attempts.size >= 16) fail('E-IPC-ATTEMPT');
       validateProfile(profile);
@@ -59,6 +61,7 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, sshCredentials, upd
         const result = await promise;
         if (attempt.cancelled) { ssh.disconnect(result.sessionId); fail('E-SSH-CONNECT-CANCELLED'); }
         ai.protectHost?.(result.sessionId, [profile.host, result.remoteAddress].filter(Boolean));
+        advice.sync();
         let credentialWarning = null;
         if (passwordToSave) { try { sshCredentials.put(profile, passwordToSave); } catch { credentialWarning = 'E-SSH-CREDENTIAL-STORE'; } }
         else if (attempt.forgetPassword) { try { sshCredentials?.delete(profile.id); } catch { credentialWarning = 'E-SSH-CREDENTIAL-STORE'; } }
@@ -67,7 +70,7 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, sshCredentials, upd
     },
     cancelConnect: id => { cancelAttempt(id); return { cancelled: true }; },
     disconnect: id => { if (ssh.listSessions().some(s => s.sessionId === id)) ssh.disconnect(id); ai.invalidatePreviews(id); },
-    closeTab: id => { automation.clearChat(id); if (automation.grant?.sessionId === id || automation.pending?.sessionId === id) automation.stop('tab-closed'); if (typeof id !== 'string' || !/^[\w-]{1,128}$/.test(id) || id === 'general') fail('E-SSH-SESSION'); if (advice.grant?.sessionId === id || advice.pending?.sessionId === id) advice.stop('tab-closed'); ai.resetSession(id); if (ssh.listSessions().some(s => s.sessionId === id)) ssh.disconnect(id); if (active === id) { invalidate(); active = 'general'; } return { discardedOutputBytes: ssh.discardOutput?.(id) || 0 }; },
+    closeTab: id => { automation.clearChat(id); if (automation.grant?.sessionId === id || automation.pending?.sessionId === id) automation.stop('tab-closed'); if (typeof id !== 'string' || !/^[\w-]{1,128}$/.test(id) || id === 'general') fail('E-SSH-SESSION'); if (advice.grant?.sessionId === id || advice.pending?.sessionId === id) advice.stop('tab-closed'); ai.resetSession(id); if (ssh.listSessions().some(s => s.sessionId === id)) ssh.disconnect(id); if (active === id) { invalidate(); active = 'general'; } advice.sync(); return { discardedOutputBytes: ssh.discardOutput?.(id) || 0 }; },
     ackOutput: id => { if (typeof id !== 'string') fail('E-IPC-INPUT'); ssh.ackOutput?.(id); },
     rotatePreview: id => {
       const candidate = ssh.listSessions().find(s => s.sessionId === id && s.error === 'E-SSH-HOSTKEY-CHANGED');
@@ -96,13 +99,12 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, sshCredentials, upd
     login: async options => { if (!options || Object.keys(options).some(k => !['remember', 'accountId'].includes(k))) fail('E-AUTH-INPUT'); const r = await auth.beginLogin(options); r.completion.catch(e => publish('auth-error', { code: e.code || 'E-AUTH-LOGIN' })); return { pending: true }; },
     cancelLogin: () => auth.cancelLogin(), logout: () => auth.logout(), account: id => auth.selectAccount(id),
     sessionModel: id => ({ model: ai.sessions.get(id)?.model || null }),
-    models: () => ai.listModels(), model: ({ id, model }) => { current(id); automation.stop('model-changed'); automation.clearChat(id); advice.stop('model-changed'); return ai.setModel(id, model); },
+    models: async () => { const models = await ai.listModels(); advice.sync(); return models; }, model: ({ id, model }) => { current(id); automation.stop('model-changed'); automation.clearChat(id); advice.stop('model-changed'); const result = ai.setModel(id, model); advice.sync(); return result; },
     previewMode: value => { if (typeof value !== 'boolean') fail('E-IPC-INPUT'); invalidate(); previewEnabled = value; return { previewEnabled }; },
     directSend: input => { manual(); current(input?.sessionId); if (previewEnabled) fail('E-AI-REVIEW-REQUIRED'); const preview = ai.preview(input); publish('manual-question', { sessionId: input.sessionId, text: preview.request.payload.input.at(-1).content }); return ai.send(preview.token); },
-    advicePrepare: input => { manual(); current(input?.sessionId); return advice.prepare(input); },
-    adviceEnable: token => advice.enable(token), adviceStop: () => advice.stop(),
-    delegationArm: input => { current(input?.sessionId); const result = automation.arm(input); advice.stop('delegated'); return result; },
-    delegationSubmit: input => { current(input?.sessionId); advice.stop('server-agent'); return automation.submit(input); },
+    advicePreference: enabled => { if (typeof enabled !== 'boolean') fail('E-PREFERENCE-INPUT'); sharePreference?.set(enabled); return advice.setPreferred(enabled); },
+    delegationArm: input => { current(input?.sessionId); return automation.arm(input); },
+    delegationSubmit: async input => { current(input?.sessionId); await advice.yieldToChat(); return automation.submit(input); },
     performUserAction: id => {
       current(id);
       const g = automation.paused, action = g?.userAction;
@@ -114,11 +116,11 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, sshCredentials, upd
       return { launched: true };
     },
     delegationPrepare: input => { current(input?.sessionId); return automation.prepare(input); },
-    delegationStart: token => { const result = automation.start(token); advice.stop('delegated'); return result; },
+    delegationStart: token => automation.start(token),
     delegationStop: () => automation.stop(),
     preview: input => { manual(); current(input?.sessionId); return ai.preview(input); },
     send: token => { manual(); return ai.send(token); }, invalidate: () => invalidate(),
-    reset: id => { current(id); automation.stop('conversation-reset'); automation.clearChat(id); advice.stop('conversation-reset'); invalidate(); ai.resetSession(id); const session = ssh.listSessions().find(s => s.sessionId === id && s.status === 'connected'); if (session) ai.protectHost(id, [session.host, session.remoteAddress].filter(Boolean)); }, cancelAI: id => { automation.stop('cancelled'); advice.stop('cancelled'); return ai.cancel(id); },
+    reset: id => { current(id); automation.stop('conversation-reset'); automation.clearChat(id); advice.stop('conversation-reset'); invalidate(); ai.resetSession(id); const session = ssh.listSessions().find(s => s.sessionId === id && s.status === 'connected'); if (session) ai.protectHost(id, [session.host, session.remoteAddress].filter(Boolean)); advice.sync(); }, cancelAI: id => { automation.stop('cancelled'); advice.stop('cancelled'); ai.cancel(id); advice.sync(); },
     execution: ({ id, command }) => { manual(); current(id); return ssh.prepareExecution(id, command); },
     approve: input => { const token = typeof input === 'string' ? input : input?.token; const followUp = typeof input === 'object' && input?.followUp === true; const id = ssh.tokens.get(token), e = ssh.executions.get(id); if (!e) fail('E-EXEC-STALE'); current(e.sessionId); return automation.approve(token, followUp); },
     cancelExecution: id => { if (automation.grant?.executionId === id) automation.stop('cancelled'); return ssh.cancelExecution(id); },

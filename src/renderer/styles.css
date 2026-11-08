@@ -13,3 +13,4 @@
 
 .messages{overflow-anchor:none}
 .suggestion textarea{display:block;width:100%;min-height:72px;margin-top:10px;resize:vertical;line-height:1.5}
+.settings-intro{color:#aebec1;font-size:12px;margin:4px 0 18px}.settings-heading{font-size:15px;color:#e9f2f0;margin:20px 0 9px;padding-top:15px;border-top:1px solid #344447}.settings-detail{color:#b8c8ca;font-size:13px;line-height:1.55;margin:8px 0 12px}.settings-heading:first-of-type{border-top:0;padding-top:0}#settings-share-toggle{border:1px solid #5fba8b;border-radius:7px;background:#1c352a;color:#a0efc1;padding:8px 11px;font-weight:600}#settings-share-toggle[aria-pressed=false]{border-color:#536367;background:#263034;color:#d2dada}#settings-share-status{color:#9ee5b8}

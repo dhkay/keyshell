@@ -4,6 +4,16 @@ const { EventEmitter } = require('node:events');
 const { AutoAdvice, AUTO_LIMITS } = require('../src/main/auto-advice.cjs');
 const { AIService } = require('../src/main/ai-service.cjs');
 const { installIPC } = require('../src/main/ipc.cjs');
+const { SharePreference } = require('../src/main/share-preference.cjs');
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+test('sharing preference defaults ON and only an explicit OFF persists across restarts', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keyshell-share-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  let preference = new SharePreference(dir); assert.equal(preference.get(), true);
+  preference.set(false); preference = new SharePreference(dir); assert.equal(preference.get(), false);
+  assert.equal(fs.statSync(preference.file).mode & 0o777, 0o600);
+  preference.set(true); assert.equal(new SharePreference(dir).get(), true);
+  fs.writeFileSync(preference.file, 'invalid'); assert.equal(preference.get(), false);
+});
 function fixture(t, fetchImpl) {
   let now = 1000, active = 'first';
   const target = { sessionId: 'first', generation: 'generation-one', status: 'connected', host: 'localhost', port: 22, username: 'tester' };
@@ -29,6 +39,20 @@ test('automatic advice requires a fresh consent binding and excludes output befo
   for (const forbidden of ['before consent', 'consent dialog', 'other session', 'old generation', 'private-secret']) assert.ok(!payload.includes(forbidden), forbidden);
   assert.match(payload, /password=\*{4}/); assert.equal(f.calls[0].tools, undefined);
   assert.equal(f.ssh.executions.size, 0);
+});
+test('preferred sharing stays ON through tab and account changes and resumes on the same connected session', async t => {
+  const f = fixture(t);
+  let hostProtected = false; f.advice.canShare = () => hostProtected;
+  f.advice.setPreferred(true); assert.equal(f.advice.state().enabled, false);
+  hostProtected = true;
+  f.advice.setPreferred(true); assert.equal(f.advice.state().enabled, true);
+  f.activate('general'); f.advice.sync(); assert.equal(f.advice.state().preferred, true); assert.equal(f.advice.state().enabled, false);
+  f.activate('first'); f.advice.sync(); assert.equal(f.advice.state().enabled, true);
+  f.auth.activeId = null; f.auth.emit('change', {}); assert.equal(f.advice.state().preferred, true); assert.equal(f.advice.state().enabled, false);
+  f.auth.activeId = 'account'; f.auth.emit('change', {}); assert.equal(f.advice.state().enabled, false);
+  f.ai.catalog = [{ slug: 'model' }]; f.advice.sync(); assert.equal(f.advice.state().enabled, true);
+  f.advice.setPreferred(false); assert.equal(f.advice.state().preferred, false); assert.equal(f.advice.state().enabled, false);
+  f.output('should not send'); await f.advice.flush(); assert.equal(f.calls.length, 0);
 });
 test('automatic advice bounds output and rate but continues beyond ten turns without repeating old output', async t => {
   const f = fixture(t); f.enable();
