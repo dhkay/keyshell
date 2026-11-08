@@ -187,7 +187,7 @@ class Automation extends EventEmitter {
       }
       if (g.queue.length && next.action === 'reply') { this.emit('notice', { sessionId: g.sessionId, text: next.summary }); continue; }
       if (g.queue.length && next.action === 'ask') continue;
-      if (next.action === 'reply' && !g.tasks.length) { g.rejectionCount = 0; this.emit('notice', { sessionId: g.sessionId, text: next.summary }); this.stop('completed'); return; }
+      if (next.action === 'reply' && !g.tasks.length) { g.rejectionCount = 0; this.emit('notice', { sessionId: g.sessionId, text: next.summary }); const pending = g.queue.splice(0); this.stop('completed'); if (pending.length) queueMicrotask(() => { for (const m of pending) { try { this.submit({ sessionId: g.sessionId, model: g.model, goal: m.text, attachments: m.attachments }, { fromQueue: true }); } catch {} } }); return; }
       if (next.action === 'reply' && g.tasks.length) {
         if (g.lastReply === next.summary) { this.emit('notice', { sessionId: g.sessionId, text: '같은 진행 설명이 반복되어 실행을 중지했습니다. 현재 상태를 확인한 뒤 채팅으로 이어서 요청해 주세요.' }); this.stop('needs-input'); return; }
         g.lastReply = next.summary;

@@ -311,3 +311,19 @@ test('an interactive sudo prompt interrupts the blocked AI command and offers su
   f.finish('0'); await tick(); f.finish('Ubuntu 24.04'); await f.automation.running;
   assert.equal(f.automation.state().reason, 'completed');
 });
+
+test('a chat message arriving while a plain reply is emitted becomes the next task', async t => {
+  const f = fixture(t, [
+    { action: 'reply', summary: '첫 질문에 답했습니다.', command: '' },
+    { action: 'plan', summary: '서버 점검', command: '', tasks: ['OS 확인'] },
+    { action: 'run', task: 1, summary: 'OS 확인', command: 'cat /etc/os-release' },
+    { action: 'done', task: 1, summary: 'OS 점검 완료', command: '' }
+  ]);
+  f.automation.on('notice', value => { if (value.text === '첫 질문에 답했습니다.') f.automation.submit({ sessionId: 'first', model: 'model', goal: '이어서 서버 OS를 확인해줘' }); });
+  f.automation.submit({ sessionId: 'first', model: 'model', goal: '안녕' });
+  await tick();
+  assert.deepEqual(f.commands, ['cat /etc/os-release']);
+  f.finish('Ubuntu'); await tick();
+  assert.equal(f.automation.state().reason, 'completed');
+  assert.equal(f.calls.length, 4);
+});
