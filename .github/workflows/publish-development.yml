@@ -5,11 +5,11 @@ on:
     inputs:
       candidate_run:
         description: Successful Development installers run ID
-        default: '42439022001'
+        default: '42443095394'
         required: true
       source_sha:
         description: Exact verified source commit
-        default: 'b53b024458d0fe837d9594fd12ea0e8184c728b8'
+        default: 'dcdda0cd228ddda6c106cf17f106193de2f6d96e'
         required: true
   push:
     branches: [main]
@@ -28,8 +28,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      CANDIDATE_RUN: ${{ inputs.candidate_run || '42439022001' }}
-      SOURCE_SHA: ${{ inputs.source_sha || 'b53b024458d0fe837d9594fd12ea0e8184c728b8' }}
+      CANDIDATE_RUN: ${{ inputs.candidate_run || '42443095394' }}
+      SOURCE_SHA: ${{ inputs.source_sha || 'dcdda0cd228ddda6c106cf17f106193de2f6d96e' }}
     steps:
       - name: 검증된 빌드 출처 확인
         shell: bash
