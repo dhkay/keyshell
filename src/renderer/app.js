@@ -71,40 +71,43 @@ function newConnection(profile = {}) {
   const attempt = { id: crypto.randomUUID(), cancelled: false };
   const cancel = () => { attempt.cancelled = true; return call('cancelConnect', attempt.id); };
   const body = modal('Connect to an SSH server', cancel); connectionAttempt = attempt; attempt.epoch = dialogEpoch;
-  body.append(el('p', 'Credentials stay in memory. A new server key requires your confirmation before authentication.'));
+  body.append(el('p', 'SSH passwords can be saved locally with OS encryption. A new server key requires your confirmation before authentication.'));
   const form = el('form'); body.append(form);
   const name = field(form, 'Connection name', 'name', 'text', profile.name || '');
   const host = field(form, 'Host', 'host', 'text', profile.host || ''); host.required = true;
   const port = field(form, 'Port', 'port', 'number', profile.port || 22); port.min = 1; port.max = 65535; port.required = true;
   const username = field(form, 'Username', 'username', 'text', profile.username || ''); username.required = true;
   const group = selectField(form, 'Group', ['Production', 'Development', 'Other'], profile.group || 'Other');
-  const method = selectField(form, 'Authentication', ['Password', 'Private key']);
+  const method = selectField(form, 'Authentication', profile.hasSavedPassword ? ['Saved password', 'Password', 'Private key'] : ['Password', 'Private key']);
   const password = field(form, 'Password', 'password', 'password'); password.autocomplete = 'off';
   const key = el('div'); key.hidden = true; const keyLabel = el('span', 'No key chosen'); let keyPath = null;
   key.append(button('Choose private key', async () => { keyPath = await call('chooseKey'); keyLabel.textContent = keyPath ? keyPath.split(/[\\/]/).pop() : 'No key chosen'; }), keyLabel); form.append(key);
   const passphrase = field(form, 'Key passphrase (optional)', 'passphrase', 'password'); passphrase.parentElement.hidden = true;
-  method.onchange = () => { key.hidden = method.value !== 'Private key'; password.parentElement.hidden = !key.hidden; passphrase.parentElement.hidden = key.hidden; };
-  const remember = field(form, 'Save connection profile (no credentials)', 'save', 'checkbox'); remember.checked = true;
+  const remember = field(form, 'Save connection profile', 'save', 'checkbox'); remember.checked = true;
+  const rememberPassword = field(form, 'Save SSH password locally with OS encryption', 'remember-password', 'checkbox'); rememberPassword.checked = !!settings.sshPasswordStorageAvailable;
+  const storageNote = el('p', settings.sshPasswordStorageAvailable ? 'The password is saved only after a successful SSH login. It never appears in the saved profile or AI request.' : 'OS encryption is unavailable. The SSH password will not be saved.', { class: 'sub' }); form.append(storageNote);
+  const updateMethod = () => { key.hidden = method.value !== 'Private key'; password.parentElement.hidden = method.value !== 'Password'; password.required = method.value === 'Password'; passphrase.parentElement.hidden = method.value !== 'Private key'; rememberPassword.parentElement.hidden = method.value !== 'Password'; rememberPassword.disabled = !settings.sshPasswordStorageAvailable || !remember.checked; };
+  method.onchange = updateMethod; remember.onchange = updateMethod; updateMethod();
   const error = el('div', '', { class: 'modal-error', role: 'alert' }); form.append(error);
   const connect = el('button', 'Connect', { type: 'submit', class: 'mint' }); actions(form, [button('Cancel', clearModal), connect]);
   form.onsubmit = async event => {
     event.preventDefault(); if (!form.reportValidity()) return; connect.disabled = true;
     const p = { host: host.value.trim(), port: Number(port.value), username: username.value.trim(), group: group.value };
     if (name.value.trim()) p.name = name.value.trim(); if (profile.id) p.id = profile.id;
-    const credentials = method.value === 'Password' ? { type: 'password', password: password.value } : { type: 'privateKey', privateKeyPath: keyPath, passphrase: passphrase.value };
+    const credentials = method.value === 'Saved password' ? { type: 'savedPassword' } : method.value === 'Password' ? { type: 'password', password: password.value } : { type: 'privateKey', privateKeyPath: keyPath, passphrase: passphrase.value };
     
     password.value = ''; passphrase.value = '';
     try {
-      await call('connect', { attemptId: attempt.id, profile: p, credentials, save: remember.checked });
+      await call('connect', { attemptId: attempt.id, profile: p, credentials, save: remember.checked, rememberPassword: remember.checked && !rememberPassword.disabled && rememberPassword.checked && method.value === 'Password' });
       if (attempt.cancelled) { await call('cancelConnect', attempt.id); return; }
       const result = await call('startConnect', attempt.id);
       if (attempt.cancelled || connectionAttempt !== attempt || attempt.epoch !== dialogEpoch) { await call('disconnect', result.sessionId); return; }
-      modalCancel = null; clearModal(); connectionAttempt = null; await activate(result.sessionId); await refreshProfiles();
+      modalCancel = null; clearModal(); connectionAttempt = null; await activate(result.sessionId); await refreshProfiles(); if (result.credentialWarning) notice('SSH connected, but the password could not be saved with OS encryption.');
     } catch (e) { if (!attempt.cancelled && connectionAttempt === attempt && attempt.epoch === dialogEpoch) { error.textContent = errorText(e.message); connect.disabled = false; } } finally { credentials.password = ''; credentials.passphrase = ''; } 
   };
   host.focus();
 }
-async function refreshProfiles() { const state = await call('state'); previewEnabled = state.previewEnabled; adviceState = state.advice; delegationState = state.delegation; profiles = state.profiles; renderProfiles(); }
+async function refreshProfiles() { const state = await call('state'); previewEnabled = state.previewEnabled; adviceState = state.advice; delegationState = state.delegation; profiles = state.profiles; settings.sshPasswordStorageAvailable = state.sshPasswordStorageAvailable; renderProfiles(); }
 const collapsed = new Set();
 function renderProfiles() {
   const nav = $('profiles'); nav.replaceChildren(); const query = $('search').value.toLowerCase();
@@ -117,7 +120,7 @@ function renderProfiles() {
     for (const p of items) {
       const live = [...sessions.values()].find(s => s.meta.id === p.id && s.meta.status === 'connected');
       const row = el('div', null, { class: 'profile-row' }); const b = button('', () => live ? activate(live.meta.sessionId) : newConnection(p), `connection${live?.meta.sessionId === active ? ' selected' : ''}`);
-      const info = el('span'); info.append(el('strong', p.name || p.host), el('span', `${p.username} · ${p.host}:${p.port}`, { class: 'sub' })); b.append(el('i', null, { class: `dot${live ? ' green' : ''}` }), info);
+      const info = el('span'); info.append(el('strong', p.name || p.host), el('span', `${p.username} · ${p.host}:${p.port}${p.hasSavedPassword ? ' · 암호화된 비밀번호 저장됨' : ''}`, { class: 'sub' })); b.append(el('i', null, { class: `dot${live ? ' green' : ''}` }), info);
       row.append(b, button('×', async () => { const body = modal('Delete saved connection?'); body.append(el('p', p.name || p.host)); actions(body, [button('Cancel', clearModal), button('Delete profile', async () => { await call('deleteProfile', p.id); clearModal(); await refreshProfiles(); })]); }, 'profile-delete')); nav.append(row);
     }
   }
@@ -307,6 +310,18 @@ async function showExecution(command) {
   actions(body, [button('Cancel', clearModal), button('터미널에 넣기', async () => { await call('cancelExecution', e.id); modalCancel = null; clearModal(); await insertCommand(e.command, e.sessionId); }), approve]);
 }
 function commandCard(card, id) { const node = el('section', null, { class: 'suggestion' }); const heading = el('div', 'Suggested command', { class: 'suggestion-title' }); heading.prepend(icon('cutout-88-adea854f6b8d.png')); node.append(heading, el('code', card.command, { class: 'command' })); const row = el('div', null, { class: 'actions' }); row.append(button('Copy', () => call('copy', card.command)), button('Review & run', () => { if (active !== id) return notice('Select the source SSH tab first.'); return showExecution(card.command); }, 'mint'), button('터미널에 넣기', () => insertCommand(card.command, id))); const note = el('p', 'Separate approval required. No safety guarantee.', { class: 'approval-note' }); note.prepend(icon('cutout-93-eb28c1dfa39f.png')); node.append(row, note); conversation(id).push(node); }
+function userActionCard(detail) {
+  const id = detail.sessionId, node = el('section', null, { class: 'suggestion' });
+  node.append(el('strong', '사용자 조작 필요'), el('p', detail.prompt));
+  if (detail.command) node.append(el('code', detail.command, { class: 'command' }));
+  node.append(el('p', 'sudo 암호는 아래 입력창이나 AI 채팅에 적지 말고 왼쪽 SSH 터미널의 암호 프롬프트에 직접 입력하세요.', { class: 'approval-note' }));
+  const input = el('textarea', null, { 'aria-label': '작업 후 전달할 내용 (비밀번호 제외)', placeholder: '실행 결과나 필요한 추가 정보만 입력하세요. 비밀번호는 제외하세요.' });
+  node.append(input);
+  const row = el('div', null, { class: 'actions' });
+  if (detail.command && !detail.command.includes('****')) { const run = button('SSH 터미널에서 실행', async () => { if (active !== id) return notice('먼저 해당 SSH 탭을 선택해 주세요.'); run.disabled = true; try { await call('performUserAction', id); notice('명령을 SSH 터미널에 보냈습니다. sudo 암호가 필요하면 터미널에 직접 입력하세요.'); } catch (error) { run.disabled = false; throw error; } }, 'mint'); row.append(run); }
+  const resume = button('확인 후 작업 계속', async () => { if (active !== id) return notice('먼저 해당 SSH 탭을 선택해 주세요.'); resume.disabled = true; try { const goal = input.value.trim() || '요청한 사용자 조작을 확인해 주세요. 실제 서버 상태를 다시 점검하고 기존 작업 목록을 이어서 진행해 주세요.'; await call('delegationSubmit', { sessionId: id, model: $('model').value, goal, attachments: [] }); input.value = ''; } catch (error) { resume.disabled = false; throw error; } }, 'mint'); row.append(resume);
+  node.append(row); conversation(id).push(node); if (active === id) renderMessages();
+}
 async function restoreModel(id = active) {
   const result = await call('sessionModel', id); if (id !== active) return;
   $('model').value = models.some(m => m.slug === result.model) ? result.model : models[0]?.slug || '';
@@ -373,7 +388,7 @@ function settings() {
   const body = modal('Settings & privacy');
   const status = el('div', null, { id: 'settings-auth-status', class: 'settings-auth-status', role: 'status', 'aria-live': 'polite' });
   status.append(el('strong', '', { id: 'settings-auth-label' }), el('p', '', { id: 'settings-auth-detail' })); body.append(status);
-  body.append(el('p', `KeyShell ${settings.version} · ${settings.packaged ? 'Packaged build' : 'Development build'}\nAuthentication storage: ${auth.persistence === 'encrypted' ? 'OS encrypted storage available' : 'Memory only'}.`), el('p', 'SSH credentials stay in memory. Saved connection profiles, trusted host keys and ChatGPT account registration metadata (email, identity, client ID and host ID) persist locally. ChatGPT tokens persist only when you opt into OS-encrypted storage. Sign-out removes tokens while keeping account registration mappings for future sign-in. Conversations, terminal output and execution records stay in memory and are discarded when the app exits. Nothing reconnects, sends or executes automatically after restart.'));
+  body.append(el('p', `KeyShell ${settings.version} · ${settings.packaged ? 'Packaged build' : 'Development build'}\nAuthentication storage: ${auth.persistence === 'encrypted' ? 'OS encrypted storage available' : 'Memory only'}.`), el('p', 'SSH passwords are stored locally only when OS encryption is available and Save SSH password is selected. Saved profiles and trusted host keys remain local. ChatGPT tokens persist only when you opt into OS-encrypted storage. Conversations, terminal output and execution records stay in memory and are discarded when the app exits. Nothing reconnects, sends or executes automatically after restart.'));
   for (const session of sessions.values()) if (session.meta.error === 'E-SSH-HOSTKEY-CHANGED') body.append(button(`Recover trusted key: ${session.meta.host}:${session.meta.port}`, () => recoverTrust(session.meta.sessionId)));
   const remember = field(body, 'Remember ChatGPT login using OS encryption', 'remember', 'checkbox'); remember.disabled = auth.persistence !== 'encrypted';
   body.append(el('h3', '터미널 화면 설정'));
@@ -416,6 +431,7 @@ window.keyshell.subscribe(safe(async ({ type, detail }) => {
   else if (type === 'clipboard-error') { notice(detail.code); }
   else if (type === 'delegation') { delegationState = detail; renderSharing(); }
   else if (type === 'automation-notice') { message(detail.text, 'answer', detail.sessionId); }
+  else if (type === 'user-action') { userActionCard(detail); }
   else if (type === 'advice') { adviceState = detail; renderSharing(); }
   else if (type === 'manual-question' || type === 'automatic-question' || type === 'result-question') {
     if (detail.historyTrimmed) message('오래된 AI 맥락을 정리하고 최근 대화와 새 SSH 출력을 기준으로 안내합니다. 화면의 이전 메시지는 그대로 남습니다.', 'request-status', detail.sessionId);
@@ -461,5 +477,5 @@ $('model').onchange = safe(async () => { await call('model', { id: active, model
 $('new-chat').onclick = safe(async () => { await call('reset', active); pendingRequests.delete(active); $('cancel-ai').hidden = true; conversations.delete(active); attachment = null; renderMessages(); renderAttachment(); });
 $('cancel-ai').onclick = safe(async () => { await call('cancelAI', active); pendingRequests.delete(active); $('cancel-ai').hidden = true; notice('AI request cancelled. A transmitted request may have reached the service.'); });
 setInterval(() => { const s = sessions.get(active); $('elapsed').textContent = s ? `${s.meta.status} · ${Math.floor((Date.now() - s.since) / 60000)}m · latency not measured` : 'No active session'; }, 1000);
-async function start() { const state = await call('state'); previewEnabled = state.previewEnabled; adviceState = state.advice; delegationState = state.delegation; profiles = state.profiles; settings.version = state.version; settings.packaged = state.packaged; renderProfiles(); for (const meta of state.sessions) ensureSession(meta); await renderAuth(state.auth); await activate('general'); if (state.recovery) { $('recovery').textContent = state.recovery.message; $('recovery').hidden = false; } for (const e of state.executions || []) { const s = sessions.get(e.sessionId); if (s) executionNode(s, `${e.id}-status`).textContent = `${e.command}\nExecution: ${e.status}${Number.isInteger(e.exitCode) ? ` · exit ${e.exitCode}` : ''}\nPrevious output was not recovered after renderer restart.`; } }
+async function start() { const state = await call('state'); previewEnabled = state.previewEnabled; adviceState = state.advice; delegationState = state.delegation; profiles = state.profiles; settings.version = state.version; settings.packaged = state.packaged; settings.sshPasswordStorageAvailable = state.sshPasswordStorageAvailable; renderProfiles(); for (const meta of state.sessions) ensureSession(meta); await renderAuth(state.auth); await activate('general'); if (state.recovery) { $('recovery').textContent = state.recovery.message; $('recovery').hidden = false; } for (const e of state.executions || []) { const s = sessions.get(e.sessionId); if (s) executionNode(s, `${e.id}-status`).textContent = `${e.command}\nExecution: ${e.status}${Number.isInteger(e.exitCode) ? ` · exit ${e.exitCode}` : ''}\nPrevious output was not recovered after renderer restart.`; } }
 start().catch(notice);

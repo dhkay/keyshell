@@ -7,7 +7,7 @@ const APP_URL = 'keyshell://app/index.html';
 function trustedFrame(event, window) {
   return !!event.senderFrame && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && event.senderFrame.url === APP_URL;
 }
-function installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, app, clipboard, Menu }) {
+function installIPC({ ipcMain, window, ssh, ai, auth, store, sshCredentials, updates, dialog, app, clipboard, Menu }) {
   let active = 'general', startingAttempt = null, recovery = null; const keys = new Set(), pastes = new Map(), attempts = new Map(), sessionAttempts = new Map(), rotations = new Map();
   let previewEnabled = false;
   const advice = new AutoAdvice({ ssh, ai, auth, getActive: () => active });
@@ -32,15 +32,20 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, ap
   const methods = {
     terminalFocus: value => { if (typeof value !== 'boolean') fail('E-IPC-INPUT'); window.webContents.setIgnoreMenuShortcuts(value); },
     copy: async value => { if (typeof value !== 'string' || Buffer.byteLength(value) > 1048576) fail('E-IPC-INPUT'); await clipboard.writeText(value); return { copied: true }; },
-    state: () => ({ profiles: store.listProfiles(), sessions: ssh.listSessions(), auth: auth.state(), version: app.getVersion(), packaged: app.isPackaged, updates: updates.state, recovery, previewEnabled, advice: advice.state(), delegation: automation.state(), executions: [...ssh.executions.values()].map(e => { const { stream, token, ...view } = e; return view; }) }),
+    state: () => ({ profiles: store.listProfiles().map(p => ({ ...p, hasSavedPassword: !!sshCredentials?.has(p) })), sshPasswordStorageAvailable: !!sshCredentials?.available, sessions: ssh.listSessions(), auth: auth.state(), version: app.getVersion(), packaged: app.isPackaged, updates: updates.state, recovery, previewEnabled, advice: advice.state(), delegation: automation.state(), executions: [...ssh.executions.values()].map(e => { const { stream, token, ...view } = e; return view; }) }),
     activate: id => { if (typeof id !== 'string' || !/^[\w-]{1,128}$/.test(id)) fail('E-SSH-SESSION'); if (id !== active) { automation.stop('tab-changed'); advice.stop('tab-changed'); invalidate(); active = id; } return { active, advice: advice.state() }; },
-    connect: ({ attemptId, profile, credentials, save }) => {
+    connect: ({ attemptId, profile, credentials, save, rememberPassword = false }) => {
       if (typeof attemptId !== 'string' || !/^[a-f0-9-]{36}$/.test(attemptId) || attempts.has(attemptId) || attempts.size >= 16) fail('E-IPC-ATTEMPT');
-      validateProfile(profile); validateCredentials(credentials);
+      validateProfile(profile);
+      const usingSavedPassword = credentials?.type === 'savedPassword';
+      if (credentials?.type === 'savedPassword' && Object.keys(credentials).join(',') === 'type') {
+        if (!store.listProfiles().some(p => p.id === profile.id && p.host === profile.host && p.port === profile.port && p.username === profile.username)) fail('E-SSH-CREDENTIAL-UNAVAILABLE');
+        credentials = sshCredentials?.get(profile);
+      } else validateCredentials(credentials);
       if (credentials?.type === 'privateKey' && !keys.has(credentials.privateKeyPath)) fail('E-IPC-KEY');
-      if (typeof save !== 'boolean') fail('E-IPC-INPUT');
+      if (typeof save !== 'boolean' || typeof rememberPassword !== 'boolean' || (rememberPassword && (!save || credentials?.type !== 'password' || !sshCredentials?.available))) fail('E-IPC-INPUT');
       ai.rememberSecret?.(credentials.password); ai.rememberSecret?.(credentials.passphrase);
-      attempts.set(attemptId, { profile, credentials, save, cancelled: false });
+      attempts.set(attemptId, { profile, credentials, save, rememberPassword, forgetPassword: !usingSavedPassword && credentials?.type === 'password' && !rememberPassword && !!profile.id, cancelled: false });
       return { attemptId };
     },
     startConnect: async id => {
@@ -48,12 +53,16 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, ap
       if (attempt.started) fail('E-IPC-ATTEMPT'); attempt.started = true;
       try {
         const profile = attempt.save ? store.saveProfile(attempt.profile) : attempt.profile;
+        const passwordToSave = attempt.rememberPassword ? attempt.credentials.password : null;
         startingAttempt = { id, attempt };
         const promise = ssh.connect(profile, attempt.credentials); startingAttempt = null; attempt.credentials = null;
         const result = await promise;
         if (attempt.cancelled) { ssh.disconnect(result.sessionId); fail('E-SSH-CONNECT-CANCELLED'); }
         ai.protectHost?.(result.sessionId, [profile.host, result.remoteAddress].filter(Boolean));
-        return result;
+        let credentialWarning = null;
+        if (passwordToSave) { try { sshCredentials.put(profile, passwordToSave); } catch { credentialWarning = 'E-SSH-CREDENTIAL-STORE'; } }
+        else if (attempt.forgetPassword) { try { sshCredentials?.delete(profile.id); } catch { credentialWarning = 'E-SSH-CREDENTIAL-STORE'; } }
+        return { ...result, credentialWarning };
       } finally { startingAttempt = null; attempt.credentials = null; attempts.delete(id); }
     },
     cancelConnect: id => { cancelAttempt(id); return { cancelled: true }; },
@@ -67,10 +76,10 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, ap
       if (!old) fail('E-SSH-HOSTKEY-STALE'); const token = randomUUID(); rotations.clear(); rotations.set(token, { old, next }); return { token, old, next };
     },
     rotateConfirm: ({ token, verified }) => { const r = rotations.get(token); rotations.delete(token); if (!r || verified !== true) fail('E-SSH-HOSTKEY-ANSWER'); return store.rotateHost(r.old, r.next); },
-    deleteProfile: id => { if (typeof id !== 'string') fail('E-IPC-INPUT'); return store.deleteProfile(id); },
+    deleteProfile: id => { if (typeof id !== 'string') fail('E-IPC-INPUT'); sshCredentials?.delete(id); return store.deleteProfile(id); },
     hostKey: ({ id, trust }) => { if (typeof id !== 'string' || typeof trust !== 'boolean') fail('E-IPC-INPUT'); return ssh.answerHostKey(id, trust); },
     write: ({ id, data }) => { current(id); const locked = ssh.listSessions().some(s => s.sessionId === id && s.terminalInputLocked); if (locked) { if (data !== '\x03') fail('E-TERM-AI-BUSY'); automation.stop('manual-takeover'); return ssh.takeControl(id); } if (automation.grant && data !== '') automation.stop('manual-takeover'); return ssh.write(id, data); },
-    takeControl: id => { current(id); automation.stop('manual-takeover'); return ssh.takeControl(id); },
+    takeControl: id => { current(id); if (automation.grant) automation.stop('manual-takeover'); return ssh.takeControl(id); },
     resize: ({ id, cols, rows }) => ssh.resize(id, cols, rows),
     pastePreview: ({ id, data }) => pastePreview(id, data),
     clipboardPastePreview: async id => { current(id); if (!ssh.listSessions().some(s => s.sessionId === id && s.status === 'connected')) fail('E-SSH-NOT-CONNECTED'); let data; try { data = await clipboard.readText(); } catch { fail('E-CLIPBOARD-READ'); } return pastePreview(id, data); },
@@ -94,6 +103,16 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, ap
     adviceEnable: token => advice.enable(token), adviceStop: () => advice.stop(),
     delegationArm: input => { current(input?.sessionId); const result = automation.arm(input); advice.stop('delegated'); return result; },
     delegationSubmit: input => { current(input?.sessionId); advice.stop('server-agent'); return automation.submit(input); },
+    performUserAction: id => {
+      current(id);
+      const g = automation.paused, action = g?.userAction;
+      if (!g || g.sessionId !== id || !automation.valid(g) || !action?.command || action.launched || action.command.includes('****')) fail('E-DELEGATION-ACTION');
+      const target = ssh.listSessions().find(s => s.sessionId === id && s.status === 'connected');
+      if (!target?.terminalReady || target.terminalInputLocked) fail('E-TERM-NOT-READY');
+      if (!ssh.write(id, action.command + '\r', { interactive: true }).accepted) fail('E-TERM-WRITE');
+      action.launched = true; automation.publish();
+      return { launched: true };
+    },
     delegationPrepare: input => { current(input?.sessionId); return automation.prepare(input); },
     delegationStart: token => { const result = automation.start(token); advice.stop('delegated'); return result; },
     delegationStop: () => automation.stop(),
@@ -108,6 +127,7 @@ function installIPC({ ipcMain, window, ssh, ai, auth, store, updates, dialog, ap
   };
   const publish = (type, detail) => { try { if (!window.isDestroyed() && !window.webContents.isDestroyed?.()) window.webContents.send('keyshell:event', { type, detail }); } catch { /* Renderer recovery owns transport cleanup; never unwind service callbacks. */ } };
   automation.on('state', detail => publish('delegation', detail)); automation.on('question', detail => publish('result-question', detail)); automation.on('notice', detail => publish('automation-notice', detail));
+  automation.on('user-action', detail => publish('user-action', detail));
   advice.on('state', detail => publish('advice', detail)); advice.on('question', detail => publish('automatic-question', detail));
   const listeners = [];
   for (const [service, names] of [[ssh, ['session', 'host-key', 'output', 'execution']], [auth, ['change', 'auth-error']], [ai, ['state']], [updates, ['update']]]) for (const name of names) {

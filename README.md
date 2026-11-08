@@ -19,7 +19,7 @@ npm ci
 npm start
 ```
 
-처음에는 저장된 연결과 AI 계정이 없습니다. AI 로그인 없이 SSH를 사용할 수 있습니다. SSH 비밀번호와 개인 키 암호는 저장하지 않습니다. 프로필과 확인한 호스트 키는 로컬에 저장합니다.
+처음에는 저장된 연결과 AI 계정이 없습니다. AI 로그인 없이 SSH를 사용할 수 있습니다. SSH 비밀번호는 사용자가 연결 프로필과 암호 저장을 선택한 경우, 연결 성공 후 프로필과 별도의 로컬 파일에 OS 암호화로 저장합니다. OS 암호화를 사용할 수 없으면 저장하지 않습니다. 개인 키 암호는 저장하지 않습니다. 프로필과 확인한 호스트 키는 로컬에 저장합니다.
 
 공식 ChatGPT 로그인은 [오픈소스 앱용 등록 흐름](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)을 사용합니다. 브라우저에서 계정과 권한을 확인해야 하며, 실제 이용 권한과 사용량 제한은 해당 계정에 적용됩니다. 로그인 유지는 사용자가 선택하며 OS 암호화 저장을 사용할 수 없으면 메모리에서만 유지됩니다.
 
@@ -53,7 +53,8 @@ SSH에 연결하고 ChatGPT에 로그인하면 서버 AI와 기존 채팅창에�
 서버 AI는 함수 도구로 명령을 한 번에 하나씩 요청합니다. 각 명령이 실행되는 동안 앱은 3초마다 SSH 출력과 종료 상태를 관찰합니다. 종료가 확인되면 종료 코드와 민감정보를 가린 출력을 모델에 돌려주고 다음 단계를 결정합니다. 3초마다 새 명령을 보내거나 같은 명령을 재실행하지 않습니다. 결과가 불확실하면 성공으로 간주하지 않고 멈춥니다. 완료 후 짧게 보고합니다.
 
 - 단계 수·전체 작업 시간·명령 실행 시간에 인위적인 제한은 없습니다. 외부 AI 계정의 사용량과 연결 상태는 적용됩니다.
-- **응답 취소**, **직접 조작**, 탭·계정·모델·연결·대화 변경, 앱 종료는 현재 작업의 후속 실행을 중단합니다. 실행 중인 명령에는 Ctrl+C로 중단을 요청하지만 종료나 변경 취소를 보장하지 않습니다.
+- **응답 취소**, **직접 조작**, 실행 결과 불확실성, 필요한 사용자 입력은 자동 실행을 일시 중지합니다. 같은 연결의 다음 채팅에서 기존 작업 목록을 재개하고 서버 상태를 재확인합니다. 채팅과 왼쪽 터미널 출력을 오가는 것만으로 작업은 꺼지지 않습니다. 탭·계정·모델·연결·대화 변경과 앱 종료는 작업을 종료합니다. 실행 중인 명령에는 Ctrl+C로 중단을 요청하지만 종료나 변경 취소를 보장하지 않습니다.
+- 대화형 `sudo` 인증이 필요하면 AI가 이유와 명령을 표시합니다. AI 명령에서 sudo 암호 프롬프트가 감지되면 해당 명령을 중단하고 `sudo -v` 인증 카드를 표시합니다. **SSH 터미널에서 실행** 버튼으로 명령을 보내고 암호는 왼쪽 SSH 터미널에 직접 입력하세요. 비밀이 아닌 후속 정보는 카드의 입력칸에 적은 뒤 **확인 후 작업 계속**을 누르면 기존 작업 목록을 이어갑니다. 명령이 끝나기 전에 계속을 누르지 마세요.
 - `****`가 포함된 명령이나 숨겨진 제어 문자는 실행하지 않습니다. 현재 SSH 계정 권한으로 실행하며 필요한 비밀값은 추측하지 않습니다.
 - 서버 출력은 판단 자료로만 취급하고 그 안의 지시를 새 사용자 요청으로 따르지 않습니다. 가림과 위험 탐지는 모든 비밀이나 명령 효과를 보장하지 않습니다.
 
@@ -142,7 +143,7 @@ npm ci
 npm start
 ```
 
-The first launch has no saved SSH connections or AI accounts. SSH works without signing in to ChatGPT. SSH passwords and private-key passphrases are not saved. Connection profiles and trusted host keys are stored locally.
+The first launch has no saved SSH connections or AI accounts. SSH works without signing in to ChatGPT. When selected, SSH passwords are saved after a successful connection in a separate local file using OS encryption. Saving is disabled if OS encryption is unavailable or Linux offers only the `basic_text` backend. Private-key passphrases are not saved. Connection profiles and trusted host keys are stored locally.
 
 ChatGPT sign-in uses the [open-source application registration flow](https://developers.openai.com/siwc/token-sharing-open-source/sign-in). Confirm your account and permissions in the browser. Access and usage limits depend on that account. Remembering the login is optional; when OS-encrypted storage is unavailable, tokens remain in memory only.
 
@@ -188,7 +189,8 @@ Connect to SSH, sign in to ChatGPT, and type your question or server task in the
 The assistant can answer ordinary questions and use Responses API function tools for requested server work. It creates a plan, requests one command at a time in the current SSH terminal, reads the confirmed exit status and locally redacted output, adjusts its next step, and gives a short result report. The app observes SSH output and execution state every three seconds; it does not inject polling commands into a running terminal. Additional chat messages are considered after the active command ends. **Review before sending** remains available as an optional confirmation mode, along with manually reviewed **Review & run** suggestions.
 
 - There is no arbitrary step count, overall duration, or command runtime cutoff. External AI account limits still apply.
-- **Cancel response**, **Take control**, changing the tab/account/model/connection/conversation, and app exit stop further steps of the current task. Ctrl+C is requested for an active command, but remote termination and rollback are not guaranteed.
+- **Cancel response**, **Take control**, an uncertain execution result, or required human input pauses the current task. The same connection's next chat message resumes the existing task list after checking server state. Reading the left terminal or sending a follow-up chat does not turn off server AI. Changing the tab/account/model/connection/conversation or exiting ends the task. Ctrl+C is requested for an active command, but remote termination and rollback are not guaranteed.
+- If interactive `sudo` authentication is required, the assistant shows a reason and command. A sudo password prompt during an AI command interrupts that command and presents a `sudo -v` authentication card. Use **SSH 터미널에서 실행** (“Run in SSH terminal”), enter the password only in the left terminal, then provide any non-secret follow-up and choose **확인 후 작업 계속** (“Continue task”) after the command finishes.
 - The assistant runs with the connected SSH account's permissions. Commands containing `****` or hidden control characters are rejected, and an unknown exit state is never reported as success. Masking cannot detect every secret or guarantee a safe command.
 
 ### One terminal for you and the AI

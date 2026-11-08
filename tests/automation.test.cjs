@@ -245,3 +245,69 @@ test('AI authority accepts a user follow-up during a running command and reads i
   assert.deepEqual(f.commands, ['cat /etc/os-release']); f.finish('Ubuntu'); await f.automation.running;
   assert.match(f.calls[2].input.at(-1).content, /Ubuntu 지원 기간도 함께 알려줘/); assert.deepEqual(f.commands, ['cat /etc/os-release']);
 });
+
+test('premature finish is rejected and the original task list advances through the remaining commands', async t => {
+  const f = fixture(t, [
+    { action: 'plan', summary: '업그레이드 순서', command: '', tasks: ['현재 상태', '백업', '업그레이드 후 검증'] },
+    { action: 'run', task: 1, summary: 'OS 확인', command: 'cat /etc/os-release' },
+    { action: 'done', task: 3, summary: '업그레이드 완료', command: '' },
+    { action: 'run', task: 2, summary: '백업 확인', command: 'ls /var/backups' },
+    { action: 'run', task: 3, summary: '최종 버전 확인', command: 'cat /etc/os-release' },
+    { action: 'done', task: 3, summary: '확인 완료', command: '' }
+  ]);
+  f.automation.submit({ sessionId: 'first', model: 'model', goal: '서버 업그레이드' });
+  await tick(); f.finish('Ubuntu 24.04'); await tick();
+  assert.deepEqual(f.commands, ['cat /etc/os-release', 'ls /var/backups']);
+  assert.match(f.calls[3].input.at(-1).content, /실행 증거가 부족/);
+  f.finish('backup.tar'); await tick(); f.finish('Ubuntu 26.04'); await f.automation.running;
+  assert.equal(f.automation.state().reason, 'completed');
+  assert.equal(f.automation.state().tasks.length, 0);
+});
+
+test('tool request for interactive sudo pauses and a chat follow-up resumes the same task list', async t => {
+  const call = (name, args, id) => () => new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output: [{ type: 'function_call', name, arguments: JSON.stringify(args), call_id: id, status: 'completed' }] } })}\n\n`);
+  const f = fixture(t, [
+    call('set_plan', { summary: '패키지 점검', tasks: ['sudo 인증', '업데이트 검증'] }, 'call_plan'),
+    call('request_user_action', { prompt: '권한이 필요합니다. 터미널에서 sudo apt update를 실행해 주세요.', command: 'sudo apt update', task: 1 }, 'call_action'),
+    call('ssh_command', { summary: '현재 패키지 상태 재확인', command: 'apt list --upgradable', task: 1 }, 'call_check'),
+    call('ssh_command', { summary: '결과 검증', command: 'cat /etc/os-release', task: 2 }, 'call_verify'),
+    call('finish_task', { summary: '검증 완료', task: 2 }, 'call_done')
+  ]);
+  f.automation.submit({ sessionId: 'first', model: 'model', goal: '패키지 업데이트' }); await f.automation.running;
+  assert.equal(f.automation.state().paused, true);
+  assert.equal(f.automation.state().armed, true);
+  assert.equal(f.automation.state().tasks.length, 2);
+  assert.equal(f.automation.state().userAction.command, 'sudo apt update');
+  assert.deepEqual(f.commands, []);
+  f.automation.stop('manual-takeover');
+  assert.equal(f.automation.state().paused, true);
+  f.automation.submit({ sessionId: 'first', model: 'model', goal: '터미널에서 실행했어. 상태를 확인해줘' });
+  await tick(); assert.deepEqual(f.commands, ['apt list --upgradable']);
+  assert.match(JSON.stringify(f.calls[2]), /기존 작업 목록을 이어서/);
+  f.finish('Listing...'); await tick(); f.finish('Ubuntu 24.04'); await f.automation.running;
+  assert.equal(f.automation.state().reason, 'completed');
+});
+
+test('an interactive sudo prompt interrupts the blocked AI command and offers sudo -v without rerunning it', async t => {
+  const f = fixture(t, [
+    { action: 'plan', summary: '업데이트 순서', command: '', tasks: ['업데이트', '검증'] },
+    { action: 'run', task: 1, summary: '패키지 갱신', command: 'sudo apt update' },
+    { action: 'run', task: 1, summary: '상태 재확인', command: 'id -u' },
+    { action: 'run', task: 2, summary: '최종 검증', command: 'cat /etc/os-release' },
+    { action: 'done', task: 2, summary: '검증 완료', command: '' }
+  ]);
+  const requests = []; f.automation.on('user-action', value => requests.push(value));
+  f.automation.submit({ sessionId: 'first', model: 'model', goal: '패키지 업데이트' }); await tick();
+  assert.deepEqual(f.commands, ['sudo apt update']);
+  const e = [...f.ssh.executions.values()].at(-1);
+  f.ssh.emit('observed-output', { sessionId: 'first', generation: 'one', executionId: e.id, stream: 'stdout', data: '[sudo] password for tester:' });
+  await f.automation.running;
+  assert.deepEqual(f.signals, [e.id]);
+  assert.equal(f.automation.state().paused, true);
+  assert.equal(requests[0].command, 'sudo -v');
+  assert.equal(f.automation.state().tasks.length, 2);
+  f.automation.submit({ sessionId: 'first', model: 'model', goal: 'sudo 인증을 마쳤어. 상태를 다시 확인해줘' });
+  await tick(); assert.deepEqual(f.commands, ['sudo apt update', 'id -u']);
+  f.finish('0'); await tick(); f.finish('Ubuntu 24.04'); await f.automation.running;
+  assert.equal(f.automation.state().reason, 'completed');
+});

@@ -9,6 +9,7 @@ const USAGE_ERRORS = new Set(['subscription_sharing_usage_limit_exceeded', 'subs
 const SSH_AGENT_TOOLS = [
   { type: 'function', name: 'set_plan', description: 'Set the ordered task list before server work.', parameters: { type: 'object', properties: { tasks: { type: 'array', items: { type: 'string' } }, summary: { type: 'string' } }, required: ['tasks', 'summary'], additionalProperties: false }, strict: true },
   { type: 'function', name: 'ssh_command', description: 'Execute one command in the current visible authenticated SSH terminal, then wait for its result before deciding the next step.', parameters: { type: 'object', properties: { command: { type: 'string' }, summary: { type: 'string' }, task: { type: 'integer' } }, required: ['command', 'summary', 'task'], additionalProperties: false }, strict: true },
+  { type: 'function', name: 'request_user_action', description: 'Pause for interactive sudo authentication or another required human action. Provide a safe command the user can run in the visible terminal, without a password or redacted value. The user can resume the same task after performing it.', parameters: { type: 'object', properties: { prompt: { type: 'string' }, command: { type: 'string' }, task: { type: 'integer' } }, required: ['prompt', 'command', 'task'], additionalProperties: false }, strict: true },
   { type: 'function', name: 'finish_task', description: 'Report completion only after server results verify every task.', parameters: { type: 'object', properties: { summary: { type: 'string' }, task: { type: 'integer' } }, required: ['summary', 'task'], additionalProperties: false }, strict: true }
 ];
 function publicError(code, transmission = 'not-sent') { return { code, transmission }; }
@@ -169,7 +170,7 @@ class AIService extends EventEmitter {
       const payload = JSON.parse(p.body), s = this._session(p.sessionId);
       if (!p.isolated) s.history = [...payload.input, { role: 'assistant', content: output }];
       const items = [...outputItems.values()];
-      if (items.length > 1 || items.some(item => !['set_plan', 'ssh_command', 'finish_task'].includes(item.name))) fail('E-AI-STREAM');
+      if (items.length > 1 || items.some(item => !['set_plan', 'ssh_command', 'request_user_action', 'finish_task'].includes(item.name))) fail('E-AI-STREAM');
       const result = { sessionId: p.sessionId, requestId: request.id, text: output, commands: commandCards(output), toolCalls: items.map(item => ({ callId: item.call_id, name: item.name, arguments: item.arguments })), outputItems: responseItems, untrusted: true, completed: true };
       emit({ type: 'completed', ...result }); return result;
     } catch (e) {

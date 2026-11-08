@@ -31,6 +31,16 @@ test('manual input revokes readiness; takeover unlocks with unknown result and r
   f.terminal.push('\x1eKS:wrong-secret:P\x1f'); assert.equal(f.terminal.ready, false); f.terminal.push(f.frame('P')); assert.equal(f.terminal.ready, true);
 });
 test('empty input does not revoke a confirmed prompt', t => { const f = protocol(t); f.terminal.manual(''); assert.equal(f.terminal.ready, true); });
+test('interactive sudo password input does not require an extra shell prompt before AI can resume', t => {
+  const f = protocol(t);
+  f.terminal.manual('sudo apt update\r');
+  f.terminal.allowInteractiveInput();
+  f.terminal.manual('password typed in terminal\r');
+  assert.equal(f.terminal.pendingPrompts, 1);
+  f.terminal.push(f.frame('P'));
+  assert.equal(f.terminal.ready, true);
+  assert.equal(f.terminal.interactiveInput, false);
+});
 test('a prompt from the first pasted command cannot authorize AI over a trailing draft', t => {
   const f = protocol(t); f.terminal.manual('echo first\rtrailing draft'); f.terminal.push(f.frame('P'));
   assert.equal(f.terminal.ready, false); assert.equal(f.terminal.start('collision', 'whoami'), false);

@@ -4,10 +4,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { generateKeyPairSync, createHash } = require('node:crypto');
+const { generateKeyPairSync, createHash, randomBytes, createCipheriv, createDecipheriv } = require('node:crypto');
 const { once, EventEmitter } = require('node:events');
 const { Server, Client, utils } = require('ssh2');
 const { Store } = require('../src/main/store.cjs');
+const { SSHCredentialStore } = require('../src/main/ssh-credential-store.cjs');
 const { SSHService, OutputFilter } = require('../src/main/ssh-service.cjs');
 const { validateProfile, validateCredentials, inspectCommand, redactSecrets } = require('../src/main/policy.cjs');
 const hostKey = () => generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs1', format: 'pem' });
@@ -58,6 +59,32 @@ test('store atomically persists only validated profiles and immutable trust; per
   if (process.platform !== 'win32') assert.equal(fs.statSync(a.file).mode & 0o777, 0o600);
   a.deleteProfile(p.id); assert.equal(b.listProfiles().length, 0);
   fs.writeFileSync(a.file, '{broken'); assert.throws(() => a.listProfiles(), { code: 'E-STORE-READ' });
+});
+test('SSH passwords use a separate encrypted local store bound to the saved profile', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keyshell-ssh-vault-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const key = randomBytes(32);
+  const safeStorage = {
+    isEncryptionAvailable: () => true,
+    getSelectedStorageBackend: () => 'gnome_libsecret',
+    encryptString: plain => { const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', key, iv); const ciphertext = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]); return Buffer.concat([iv, cipher.getAuthTag(), ciphertext]); },
+    decryptString: encrypted => { const decipher = createDecipheriv('aes-256-gcm', key, encrypted.subarray(0, 12)); decipher.setAuthTag(encrypted.subarray(12, 28)); return Buffer.concat([decipher.update(encrypted.subarray(28)), decipher.final()]).toString('utf8'); }
+  };
+  const store = new Store(dir), vault = new SSHCredentialStore(dir, safeStorage);
+  const profile = store.saveProfile({ host: 'server.example', port: 22, username: 'admin' });
+  vault.put(profile, 'test-only-private-password');
+  assert.equal(vault.has(profile), true);
+  assert.equal(vault.get(profile).password, 'test-only-private-password');
+  assert.equal(vault.has({ ...profile, host: 'other.example' }), false);
+  assert.throws(() => vault.get({ ...profile, host: 'other.example' }), { code: 'E-SSH-CREDENTIAL-UNAVAILABLE' });
+  const onDisk = fs.readFileSync(vault.file, 'utf8');
+  assert.doesNotMatch(onDisk, /test-only-private-password/);
+  assert.doesNotMatch(fs.readFileSync(store.file, 'utf8'), /test-only-private-password/);
+  if (process.platform !== 'win32') { assert.equal(fs.statSync(vault.directory).mode & 0o777, 0o700); assert.equal(fs.statSync(vault.file).mode & 0o777, 0o600); }
+  const insecure = new SSHCredentialStore(dir, { ...safeStorage, getSelectedStorageBackend: () => 'basic_text' });
+  assert.equal(insecure.available, false);
+  assert.throws(() => insecure.put(profile, 'another-password'), { code: 'E-SSH-CREDENTIAL-UNAVAILABLE' });
+  vault.delete(profile.id);
+  assert.equal(vault.has(profile), false);
 });
 test('command review accepts visible commands with risk notices and rejects hidden controls', () => {
   for (const c of ['php -v', 'php-fpm8.5 -v', 'apt update', 'apt install nginx -y', 'cat relative', 'curl https://x', 'ls; whoami', 'echo $(id)', 'sh -c whoami', 'ls | head', 'ls\nwhoami', 'sudo whoami', 'python -c x', 'ls > /tmp/x', 'ls `id`', 'ls $HOME', 'uname -a']) assert.equal(inspectCommand(c).allowed, true, c);
